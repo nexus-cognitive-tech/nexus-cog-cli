@@ -1,6 +1,6 @@
 [package]
 name = "nexus-cog-cli"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 rust-version = "1.85"
 description = "Command-line interface for the Nexus Cog cognitive stack"
@@ -14,13 +14,15 @@ readme = "README.md"
 
 [dependencies]
 nexus-cog-core = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-core", tag = "v0.1.0" }
-nexus-cog-palace = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-palace", tag = "v0.1.0" }
+nexus-cog-storage = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-storage", tag = "v0.1.0" }
+nexus-cog-embeddings = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-embeddings", tag = "v0.1.1" }
+nexus-cog-palace = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-palace", tag = "v0.2.0" }
 nexus-cog-brain = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-brain", tag = "v0.1.0" }
 nexus-cog-cognitive = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-cognitive", tag = "v0.1.0" }
 nexus-cog-causal = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-causal", tag = "v0.1.0" }
 nexus-cog-patterns = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-patterns", tag = "v0.1.0" }
 nexus-cog-provenance = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-provenance", tag = "v0.1.0" }
-nexus-cog-intel = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-intel", tag = "v0.1.0" }
+nexus-cog-intel = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-intel", tag = "v0.2.0" }
 nexus-cog-intent = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-intent", tag = "v0.1.0" }
 nexus-cog-antifragile = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-antifragile", tag = "v0.1.0" }
 
@@ -53,35 +55,3 @@ tempfile = "3"
 [[bin]]
 name = "nexus-cog"
 path = "src/bin/nexus-cog.rs"
-
-# Path overrides: build against the in-tree copies instead of git tags so
-# local fixes land without re-tagging upstream.
-[patch."https://github.com/nexus-cognitive-tech/nexus-cog-core"]
-nexus-cog-core = { path = "../nexus-cog-core" }
-
-[patch."https://github.com/nexus-cognitive-tech/nexus-cog-palace"]
-nexus-cog-palace = { path = "../nexus-cog-palace" }
-
-[patch."https://github.com/nexus-cognitive-tech/nexus-cog-brain"]
-nexus-cog-brain = { path = "../nexus-cog-brain" }
-
-[patch."https://github.com/nexus-cognitive-tech/nexus-cog-cognitive"]
-nexus-cog-cognitive = { path = "../nexus-cog-cognitive" }
-
-[patch."https://github.com/nexus-cognitive-tech/nexus-cog-causal"]
-nexus-cog-causal = { path = "../nexus-cog-causal" }
-
-[patch."https://github.com/nexus-cognitive-tech/nexus-cog-patterns"]
-nexus-cog-patterns = { path = "../nexus-cog-patterns" }
-
-[patch."https://github.com/nexus-cognitive-tech/nexus-cog-provenance"]
-nexus-cog-provenance = { path = "../nexus-cog-provenance" }
-
-[patch."https://github.com/nexus-cognitive-tech/nexus-cog-intel"]
-nexus-cog-intel = { path = "../nexus-cog-intel" }
-
-[patch."https://github.com/nexus-cognitive-tech/nexus-cog-intent"]
-nexus-cog-intent = { path = "../nexus-cog-intent" }
-
-[patch."https://github.com/nexus-cognitive-tech/nexus-cog-antifragile"]
-nexus-cog-antifragile = { path = "../nexus-cog-antifragile" }
