@@ -4,3 +4,9 @@ Cargo.lock
 **/*.rs.bk
 .idea/
 .vscode/
+
+# Local SQLite DBs (not source of truth)
+**/*.db
+**/*.db-shm
+**/*.db-wal
+~/.local/
