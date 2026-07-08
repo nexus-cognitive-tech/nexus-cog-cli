@@ -16,6 +16,10 @@ readme = "README.md"
 name = "nexus-cog"
 path = "src/bin/nexus-cog.rs"
 
+[[bin]]
+name = "nexus-cog-mcp"
+path = "src/bin/nexus-cog-mcp.rs"
+
 [dependencies]
 nexus-cog-core = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-core", tag = "v0.1.0" }
 nexus-cog-palace = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-palace", tag = "v0.1.0" }
@@ -46,6 +50,10 @@ uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 log = "0.4"
+rmcp = { version = "2.1", features = ["server", "macros", "transport-io"] }
+schemars = "1"
+tokio = { version = "1", features = ["full"] }
+parking_lot = "0.12"
 
 [dev-dependencies]
 tempfile = "3"

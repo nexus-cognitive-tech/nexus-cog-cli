@@ -52,3 +52,18 @@ nexus-cog --profile myproject decay --format json
 ## License
 
 Apache-2.0.
+
+
+## MCP server (`nexus-cog-mcp`)
+
+Same workspace ships an MCP server binary — every CLI subcommand is also
+an MCP tool. One source of truth:
+
+```bash
+nexus-cog-mcp   # talks MCP over stdio
+```
+
+The 50+ CLI subcommands are registered as MCP tools under their snake_case
+names (`palace_rooms`, `causal_forward`, `intel_predict`, etc.). The
+server runs the same `nexus_cog_cli::commands::*` functions, so behaviour
+and output are identical.
