@@ -1,6 +1,6 @@
 [package]
 name = "nexus-cog-cli"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Command-line interface for the Nexus Cog cognitive stack"
@@ -14,17 +14,17 @@ readme = "README.md"
 
 [dependencies]
 nexus-cog-core = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-core", tag = "v0.1.2" }
-nexus-cog-storage = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-storage", tag = "v0.1.0" }
-nexus-cog-embeddings = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-embeddings", tag = "v0.1.1" }
-nexus-cog-palace = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-palace", tag = "v0.2.0" }
-nexus-cog-brain = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-brain", tag = "v0.1.1" }
-nexus-cog-cognitive = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-cognitive", tag = "v0.1.1" }
-nexus-cog-causal = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-causal", tag = "v0.2.1" }
-nexus-cog-patterns = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-patterns", tag = "v0.1.0" }
-nexus-cog-provenance = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-provenance", tag = "v0.2.2" }
-nexus-cog-intel = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-intel", tag = "v0.3.0" }
-nexus-cog-intent = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-intent", tag = "v0.2.0" }
-nexus-cog-antifragile = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-antifragile", tag = "v0.1.1" }
+nexus-cog-storage = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-storage", tag = "v0.1.1" }
+nexus-cog-embeddings = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-embeddings", tag = "v0.1.3" }
+nexus-cog-palace = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-palace", tag = "v0.2.3" }
+nexus-cog-brain = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-brain", tag = "v0.1.2" }
+nexus-cog-cognitive = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-cognitive", tag = "v0.1.2" }
+nexus-cog-causal = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-causal", tag = "v0.2.3" }
+nexus-cog-patterns = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-patterns", tag = "v0.1.1" }
+nexus-cog-provenance = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-provenance", tag = "v0.2.4" }
+nexus-cog-intel = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-intel", tag = "v0.3.2" }
+nexus-cog-intent = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-intent", tag = "v0.2.2" }
+nexus-cog-antifragile = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-antifragile", tag = "v0.1.2" }
 
 clap = { version = "4", features = ["derive", "cargo", "wrap_help", "env"] }
 clap_complete = "4"
@@ -55,9 +55,3 @@ tempfile = "3"
 [[bin]]
 name = "nexus-cog"
 path = "src/bin/nexus-cog.rs"
-
-# Force a single version of nexus-cog-core across every transitive
-# dependency. Without this, downstream crates (intent, cognitive, causal,
-# …) still pin v0.1.0 and produce type-duplication errors at link time.
-[patch."https://github.com/nexus-cognitive-tech/nexus-cog-core"]
-nexus-cog-core = { path = "../nexus-cog-core" }
