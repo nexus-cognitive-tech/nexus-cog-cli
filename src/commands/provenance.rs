@@ -43,7 +43,7 @@ pub fn record(
 
 pub fn explain(ctx: &Ctx, id: &str) -> Result<Value> {
     let engine = ctx.engines.provenance.clone();
-    let mut engine2 = nexus_cog_provenance::ProvenanceExplainer::new(engine);
+    let engine2 = nexus_cog_provenance::ProvenanceExplainer::new(engine.clone());
     match engine2.explain_record(id) {
         Some(s) => Ok(serde_json::json!({ "id": id, "explanation": s, "found": true })),
         None => Ok(serde_json::json!({ "id": id, "found": false })),
@@ -52,7 +52,7 @@ pub fn explain(ctx: &Ctx, id: &str) -> Result<Value> {
 
 pub fn search(ctx: &Ctx, query: &str) -> Result<Value> {
     let engine = ctx.engines.provenance.clone();
-    let mut engine2 = nexus_cog_provenance::ProvenanceQueryEngine::new(engine);
+    let engine2 = nexus_cog_provenance::ProvenanceQueryEngine::new(engine);
     let r = engine2.search(query);
     let n = r.len();
     Ok(serde_json::json!({ "query": query, "count": n, "results": r }))

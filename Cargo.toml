@@ -1,6 +1,6 @@
 [package]
 name = "nexus-cog-cli"
-version = "0.3.2"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Command-line interface for the Nexus Cog cognitive stack"
@@ -19,11 +19,11 @@ nexus-cog-embeddings = { git = "https://github.com/nexus-cognitive-tech/nexus-co
 nexus-cog-palace = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-palace", tag = "v0.2.0" }
 nexus-cog-brain = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-brain", tag = "v0.1.0" }
 nexus-cog-cognitive = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-cognitive", tag = "v0.1.0" }
-nexus-cog-causal = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-causal", tag = "v0.1.0" }
+nexus-cog-causal = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-causal", tag = "v0.2.1" }
 nexus-cog-patterns = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-patterns", tag = "v0.1.0" }
-nexus-cog-provenance = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-provenance", tag = "v0.1.0" }
-nexus-cog-intel = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-intel", tag = "v0.2.0" }
-nexus-cog-intent = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-intent", tag = "v0.1.0" }
+nexus-cog-provenance = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-provenance", tag = "v0.2.2" }
+nexus-cog-intel = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-intel", tag = "v0.3.0" }
+nexus-cog-intent = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-intent", tag = "v0.2.0" }
 nexus-cog-antifragile = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-antifragile", tag = "v0.1.0" }
 
 clap = { version = "4", features = ["derive", "cargo", "wrap_help", "env"] }

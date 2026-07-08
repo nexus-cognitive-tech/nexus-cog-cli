@@ -1,9 +1,8 @@
-//! Intent engine: declaration, drift tracking, preservation index.
+//! Intent engine: declaration, preservation index.
 
 use anyhow::Result;
 use nexus_cog_core::common::Severity;
 use nexus_cog_core::intent::{Invariant, InvariantOperator, ModuleIntent};
-use nexus_cog_intent::IntentDriftEntry;
 use serde_json::Value;
 
 use crate::ctx::Ctx;
@@ -44,16 +43,32 @@ pub fn check(ctx: &mut Ctx, module: &str, current_code: &str) -> Result<Value> {
 }
 
 pub fn drift(ctx: &mut Ctx, module: &str, observation: &str, score: Option<f64>) -> Result<Value> {
-    use nexus_cog_core::Severity;
-    let score_u32 = (score.unwrap_or(0.5) * 100.0) as u32;
-    let entry = IntentDriftEntry {
+    // Drift is now derived automatically from intent_check results. This
+    // command remains for backward compatibility — it persists a manual
+    // annotation through intent_storage instead of through the
+    // (removed) IntentDriftTracker.
+    use nexus_cog_core::intent::{IntentCheck, IntentDrift};
+    use nexus_cog_core::common::Severity;
+    let ipi = ((score.unwrap_or(0.5)) * 100.0) as u32;
+    let drift = IntentDrift {
+        id: format!("drift-{}", uuid::Uuid::new_v4()),
         module: module.to_string(),
-        ipi: score_u32,
-        timestamp: chrono::Utc::now(),
-        most_severe_drift: observation.to_string(),
+        invariant_id: String::new(),
+        description: observation.to_string(),
         severity: Severity::Warning,
+        location: None,
+        suggested_fix: String::new(),
     };
-    ctx.engines.drift.record(entry);
+    let check = IntentCheck {
+        id: format!("chk-{}", uuid::Uuid::new_v4()),
+        module: module.to_string(),
+        ipi,
+        invariants: Vec::new(),
+        drift: vec![drift],
+        timestamp: chrono::Utc::now(),
+        confidence: nexus_cog_core::common::Confidence::new(0.5),
+    };
+    ctx.engines.intent_storage.record_check(check);
     Ok(serde_json::json!({ "ok": true }))
 }
 

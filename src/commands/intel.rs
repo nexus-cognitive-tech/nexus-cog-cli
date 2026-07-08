@@ -39,8 +39,8 @@ pub fn learner_stats(ctx: &Ctx) -> Result<Value> {
     Ok(serde_json::to_value(s)?)
 }
 
-pub fn predict(ctx: &Ctx, task: &str, tools: &[String]) -> Result<Value> {
-    let p = ctx.engines.predictor.predict(task, tools);
+pub fn predict(ctx: &Ctx, task: &str, _tools: &[String]) -> Result<Value> {
+    let p = ctx.engines.predictor.predict(task);
     Ok(serde_json::to_value(p)?)
 }
 
@@ -74,9 +74,8 @@ pub fn record_interaction(
     Ok(serde_json::json!({ "task": task, "success": success, "ok": true }))
 }
 
-pub fn suggest_approach(ctx: &Ctx, task: &str, complexity: Option<&str>) -> Result<Value> {
-    let comp = parse_complexity(complexity.unwrap_or("medium"))?;
-    let s = ctx.engines.learner.suggest_approach(task, &comp);
+pub fn suggest_approach(ctx: &Ctx, task: &str, _complexity: Option<&str>) -> Result<Value> {
+    let s = ctx.engines.learner.suggest_approach(task);
     Ok(serde_json::to_value(s)?)
 }
 

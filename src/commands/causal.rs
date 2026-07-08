@@ -45,7 +45,7 @@ pub fn add_edge(ctx: &mut Ctx, from: &str, to: &str, kind: Option<&str>, strengt
         strength: s,
         confidence: Confidence::new(1.0),
         evidence: vec![],
-    });
+    })?;
     if !added {
         anyhow::bail!("causal edge {from}->{to} rejected: missing endpoint or self-loop rejected");
     }
