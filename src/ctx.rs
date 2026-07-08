@@ -16,7 +16,7 @@ use nexus_cog_causal::{
 };
 use nexus_cog_cognitive::{CognitiveMirror, CognitiveScaffold, ResponseAnalyzer, ThoughtChain};
 use nexus_cog_intel::{AdaptiveLearner, LongTermMemory, SuccessPredictor};
-use nexus_cog_intent::{IntentChecker, IntentDeclarator, IntentDriftTracker};
+use nexus_cog_intent::{IntentChecker, IntentDeclarator, IntentDriftTracker, IntentStorage};
 use nexus_cog_palace::{PersistentPalace, SqliteBackend};
 use nexus_cog_patterns::PatternMatcher;
 use nexus_cog_provenance::ProvenanceGraphEngine;
@@ -42,6 +42,7 @@ pub struct Engines {
     pub ltm: LongTermMemory,
     pub learner: AdaptiveLearner,
     pub predictor: SuccessPredictor,
+    pub intent_storage: IntentStorage,
     pub declarator: IntentDeclarator,
     pub intent_checker: IntentChecker,
     pub drift: IntentDriftTracker,
@@ -74,6 +75,7 @@ impl Engines {
             ltm: LongTermMemory::new(),
             learner: AdaptiveLearner::new(),
             predictor: SuccessPredictor::new(),
+            intent_storage: IntentStorage::new(),
             declarator: IntentDeclarator::new(),
             intent_checker: IntentChecker::new(),
             drift: IntentDriftTracker::new(),

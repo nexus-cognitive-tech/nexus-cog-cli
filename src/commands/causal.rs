@@ -3,7 +3,7 @@
 use anyhow::Result;
 use nexus_cog_core::causal::{CausalEdge, CausalEdgeType, CausalNode, CausalNodeType};
 use nexus_cog_core::Confidence;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::ctx::Ctx;
 
@@ -18,6 +18,7 @@ pub fn add_node(
         Some(s) => parse_node_type(s)?,
         None => CausalNodeType::CodeEntity,
     };
+    let existed = ctx.engines.causal.node(id).is_some();
     ctx.engines.causal.add_node(CausalNode {
         id: id.to_string(),
         node_type,
@@ -28,33 +29,41 @@ pub fn add_node(
         confidence: Confidence::new(1.0),
         tags: vec![],
     });
-    Ok(format_dump(&ctx.engines.causal))
+    Ok(format_dump(&ctx.engines.causal, &format!("{} node `{id}`", if existed { "updated" } else { "added" })))
 }
 
-pub fn add_edge(ctx: &mut Ctx, from: &str, to: &str) -> Result<Value> {
-    ctx.engines.causal.add_edge(CausalEdge {
+pub fn add_edge(ctx: &mut Ctx, from: &str, to: &str, kind: Option<&str>, strength: Option<f64>) -> Result<Value> {
+    let edge_type = match kind {
+        Some(s) => parse_edge_type(s)?,
+        None => CausalEdgeType::Causes,
+    };
+    let s = strength.unwrap_or(0.5) as f32;
+    let added = ctx.engines.causal.add_edge(CausalEdge {
         from: from.to_string(),
         to: to.to_string(),
-        edge_type: CausalEdgeType::Causes,
-        strength: 0.5,
+        edge_type,
+        strength: s,
         confidence: Confidence::new(1.0),
         evidence: vec![],
     });
-    Ok(format_dump(&ctx.engines.causal))
+    if !added {
+        anyhow::bail!("causal edge {from}->{to} rejected: missing endpoint or self-loop rejected");
+    }
+    Ok(format_dump(&ctx.engines.causal, &format!("added edge `{from}` -> `{to}`")))
 }
 
 pub fn forward(ctx: &Ctx, entity: &str) -> Result<Value> {
     let engine = ctx.engines.causal.clone();
     let mut reasoner = nexus_cog_causal::ForwardReasoner::new(engine);
     let impact = reasoner.impact_of(entity);
-    Ok(serde_json::json!({ "entity": entity, "impact": impact }))
+    Ok(json!({ "entity": entity, "impact": impact }))
 }
 
 pub fn backward(ctx: &Ctx, entity: &str) -> Result<Value> {
     let engine = ctx.engines.causal.clone();
     let mut reasoner = nexus_cog_causal::BackwardReasoner::new(engine);
     let impact = reasoner.causes_of(entity);
-    Ok(serde_json::json!({ "entity": entity, "impact": impact }))
+    Ok(json!({ "entity": entity, "impact": impact }))
 }
 
 pub fn counterfactual(ctx: &Ctx, entity: &str) -> Result<Value> {
@@ -79,19 +88,30 @@ pub fn blast(ctx: &Ctx, entity: &str) -> Result<Value> {
 }
 
 pub fn dump(ctx: &Ctx) -> Result<Value> {
-    Ok(format_dump(&ctx.engines.causal))
+    Ok(format_dump(&ctx.engines.causal, "dump"))
 }
 
-fn format_dump(_engine: &nexus_cog_causal::CausalGraphEngine) -> Value {
-    // CausalGraphEngine uses petgraph internally and isn't Serialize; emit
-    // a stable textual summary.
-    serde_json::json!({ "summary": "graph state mutated; use `dump` to inspect" })
+fn format_dump(engine: &nexus_cog_causal::CausalGraphEngine, op: &str) -> Value {
+    let nodes = engine.nodes();
+    let edges = engine.edges();
+    let mut by_type: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for n in &nodes {
+        *by_type.entry(format!("{:?}", n.node_type)).or_insert(0) += 1;
+    }
+    json!({
+        "op": op,
+        "node_count": nodes.len(),
+        "edge_count": edges.len(),
+        "nodes": nodes,
+        "edges": edges,
+        "by_type": by_type,
+    })
 }
 
 fn parse_node_type(s: &str) -> Result<CausalNodeType> {
     use CausalNodeType::*;
     Ok(match s.to_lowercase().as_str() {
-        "code_entity" => CodeEntity,
+        "code" | "code_entity" | "code-entity" => CodeEntity,
         "behavior" => Behavior,
         "feature" => Feature,
         "invariant" => Invariant,
@@ -99,7 +119,19 @@ fn parse_node_type(s: &str) -> Result<CausalNodeType> {
         "decision" => Decision,
         "constraint" => Constraint,
         "bug" => Bug,
-        "external_dep" => ExternalDep,
+        "external" | "external_dep" | "external-dep" => ExternalDep,
         other => anyhow::bail!("unknown causal node type: {other}"),
+    })
+}
+
+fn parse_edge_type(s: &str) -> Result<CausalEdgeType> {
+    use CausalEdgeType::*;
+    Ok(match s.to_lowercase().as_str() {
+        "causes" => Causes,
+        "enables" => Enables,
+        "prevents" => Prevents,
+        "mitigates" => Mitigates,
+        "correlates" => Correlates,
+        other => anyhow::bail!("unknown causal edge type: {other}"),
     })
 }

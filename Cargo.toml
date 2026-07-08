@@ -53,3 +53,35 @@ tempfile = "3"
 [[bin]]
 name = "nexus-cog"
 path = "src/bin/nexus-cog.rs"
+
+# Path overrides: build against the in-tree copies instead of git tags so
+# local fixes land without re-tagging upstream.
+[patch."https://github.com/nexus-cognitive-tech/nexus-cog-core"]
+nexus-cog-core = { path = "../nexus-cog-core" }
+
+[patch."https://github.com/nexus-cognitive-tech/nexus-cog-palace"]
+nexus-cog-palace = { path = "../nexus-cog-palace" }
+
+[patch."https://github.com/nexus-cognitive-tech/nexus-cog-brain"]
+nexus-cog-brain = { path = "../nexus-cog-brain" }
+
+[patch."https://github.com/nexus-cognitive-tech/nexus-cog-cognitive"]
+nexus-cog-cognitive = { path = "../nexus-cog-cognitive" }
+
+[patch."https://github.com/nexus-cognitive-tech/nexus-cog-causal"]
+nexus-cog-causal = { path = "../nexus-cog-causal" }
+
+[patch."https://github.com/nexus-cognitive-tech/nexus-cog-patterns"]
+nexus-cog-patterns = { path = "../nexus-cog-patterns" }
+
+[patch."https://github.com/nexus-cognitive-tech/nexus-cog-provenance"]
+nexus-cog-provenance = { path = "../nexus-cog-provenance" }
+
+[patch."https://github.com/nexus-cognitive-tech/nexus-cog-intel"]
+nexus-cog-intel = { path = "../nexus-cog-intel" }
+
+[patch."https://github.com/nexus-cognitive-tech/nexus-cog-intent"]
+nexus-cog-intent = { path = "../nexus-cog-intent" }
+
+[patch."https://github.com/nexus-cognitive-tech/nexus-cog-antifragile"]
+nexus-cog-antifragile = { path = "../nexus-cog-antifragile" }

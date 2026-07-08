@@ -6,22 +6,18 @@ use serde_json::Value;
 
 use crate::ctx::Ctx;
 
-/// Records a provenance entry. Uses interior mutability through the
-/// engine (its internal `IndexMap` is mutated via `&mut self`).
 pub fn record(
-    ctx: &Ctx,
+    ctx: &mut Ctx,
     artifact: &str,
     origin: &str,
     content: &str,
     source: &str,
     prompt: &str,
 ) -> Result<Value> {
-    use std::sync::Mutex;
-    // Re-acquire mutable access via a thread-local pattern: clone the engine
-    // state, mutate the clone, then commit back.
     let src = parse_source(source)?;
+    let id = format!("rec-{}", uuid::Uuid::new_v4());
     let rec = ProvenanceRecord {
-        id: format!("rec-{}", uuid::Uuid::new_v4()),
+        id: id.clone(),
         artifact: artifact.to_string(),
         source: src,
         origin: origin.to_string(),
@@ -36,18 +32,20 @@ pub fn record(
         confidence: nexus_cog_core::Confidence::new(1.0),
         metadata: Default::default(),
     };
-    // The CLI ships a per-call clone of the provenance engine to satisfy
-    // the &self signature; a proper fix would expose &mut self on Ctx.
-    let _ = Mutex::new(());
-    let _ = rec;
-    Ok(serde_json::json!({ "ok": false, "reason": "provenance record requires &mut Ctx; not yet wired through bin" }))
+    ctx.engines.provenance.add_record(rec);
+    Ok(serde_json::json!({
+        "id": id,
+        "artifact": artifact,
+        "source": src.id(),
+        "ok": true
+    }))
 }
 
 pub fn explain(ctx: &Ctx, id: &str) -> Result<Value> {
     let engine = ctx.engines.provenance.clone();
     let mut engine2 = nexus_cog_provenance::ProvenanceExplainer::new(engine);
     match engine2.explain_record(id) {
-        Some(s) => Ok(serde_json::json!({ "id": id, "explanation": s })),
+        Some(s) => Ok(serde_json::json!({ "id": id, "explanation": s, "found": true })),
         None => Ok(serde_json::json!({ "id": id, "found": false })),
     }
 }
@@ -58,6 +56,11 @@ pub fn search(ctx: &Ctx, query: &str) -> Result<Value> {
     let r = engine2.search(query);
     let n = r.len();
     Ok(serde_json::json!({ "query": query, "count": n, "results": r }))
+}
+
+pub fn snapshot(ctx: &Ctx) -> Result<Value> {
+    let snap = ctx.engines.provenance.snapshot();
+    Ok(serde_json::to_value(snap)?)
 }
 
 fn parse_source(s: &str) -> Result<ProvenanceSource> {

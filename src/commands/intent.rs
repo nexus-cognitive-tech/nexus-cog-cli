@@ -10,20 +10,37 @@ use crate::ctx::Ctx;
 use Severity as Sev;
 
 pub fn declare(ctx: &mut Ctx, module: &str, purpose: &str) -> Result<Value> {
-    let r = ctx.engines.declarator.declare(module, purpose);
-    Ok(serde_json::json!({ "module": module, "ok": r.is_ok() }))
+    let intent = ModuleIntent {
+        id: format!("intent-{}", uuid::Uuid::new_v4()),
+        module: module.to_string(),
+        purpose: purpose.to_string(),
+        invariants: Vec::new(),
+        tags: Vec::new(),
+        author: "nexus-cog-cli".into(),
+        declared_at: chrono::Utc::now(),
+        last_verified_at: None,
+    };
+    ctx.engines.intent_storage.declare(intent);
+    Ok(serde_json::json!({ "module": module, "ok": true }))
 }
 
-pub fn check(ctx: &Ctx, module: &str, current_code: &str) -> Result<Value> {
-    let _ = (module, current_code);
-    // IntentChecker::check requires an IntentStorage handle — the CLI is a
-    // thin shim and doesn't maintain one yet. Report not-found for any
-    // module until full intent storage lands in the palace.
-    Ok(serde_json::json!({
-        "module": module,
-        "ok": false,
-        "reason": "intent storage not yet exposed in PersistentPalace"
-    }))
+pub fn check(ctx: &mut Ctx, module: &str, current_code: &str) -> Result<Value> {
+    // Extract trivial observations from the code snippet: identifier tokens,
+    // string literals, and numeric literals. This is a heuristic but it's
+    // strictly better than the previous stub.
+    let observations = extract_observations(current_code);
+    match ctx
+        .engines
+        .intent_checker
+        .check(&mut ctx.engines.intent_storage, module, &observations)
+    {
+        Ok(check) => Ok(serde_json::to_value(check)?),
+        Err(e) => Ok(serde_json::json!({
+            "module": module,
+            "ok": false,
+            "reason": e.to_string(),
+        })),
+    }
 }
 
 pub fn drift(ctx: &mut Ctx, module: &str, observation: &str, score: Option<f64>) -> Result<Value> {
@@ -40,8 +57,8 @@ pub fn drift(ctx: &mut Ctx, module: &str, observation: &str, score: Option<f64>)
     Ok(serde_json::json!({ "ok": true }))
 }
 
-pub fn index(ctx: &mut Ctx) -> Result<Value> {
-    let intents = ctx.engines.declarator.intents();
+pub fn index(ctx: &Ctx) -> Result<Value> {
+    let intents = ctx.engines.intent_storage.intents();
     let summary = serde_json::json!({
         "count": intents.len(),
         "modules": intents.iter().map(|i| &i.module).collect::<Vec<_>>(),
@@ -64,13 +81,13 @@ pub fn declare_with_invariants(
             .map(|(desc, lhs, op, rhs, severity, source)| -> Result<Invariant> {
                 Ok(Invariant {
                     id: format!("inv-{}", uuid::Uuid::new_v4()),
-                description: desc,
-                lhs,
-                op: parse_op(&op)?,
-                rhs,
-                severity: parse_severity(severity),
-                holds: true,
-                source: source.map(|s| s.to_string()),
+                    description: desc,
+                    lhs,
+                    op: parse_op(&op)?,
+                    rhs,
+                    severity: parse_severity(severity),
+                    holds: true,
+                    source: source.map(|s| s.to_string()),
                 })
             })
             .collect::<Result<Vec<_>>>()?,
@@ -79,8 +96,32 @@ pub fn declare_with_invariants(
         declared_at: chrono::Utc::now(),
         last_verified_at: None,
     };
-    ctx.engines.declarator.declare_storage(intent);
+    ctx.engines.intent_storage.declare(intent);
     Ok(serde_json::json!({ "module": module, "ok": true }))
+}
+
+fn extract_observations(code: &str) -> Vec<(String, String)> {
+    // Heuristic: collect (lhs, value) pairs from simple assignments.
+    // `let foo = "bar";` → ("foo", "bar")
+    // `let n = 42;`      → ("n", "42")
+    let mut out = Vec::new();
+    for line in code.lines() {
+        let trimmed = line.trim().trim_end_matches(';').trim();
+        if let Some(rest) = trimmed.strip_prefix("let ") {
+            if let Some((lhs, rhs)) = rest.split_once('=') {
+                let lhs = lhs.trim().to_string();
+                let rhs = rhs.trim().trim_matches('"').to_string();
+                if !lhs.is_empty() && !rhs.is_empty() {
+                    out.push((lhs, rhs));
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        // Provide a single dummy observation so the evaluator doesn't short-circuit.
+        out.push(("__no_assignment__".into(), code.to_string()));
+    }
+    out
 }
 
 fn parse_op(s: &str) -> Result<InvariantOperator> {
@@ -93,7 +134,7 @@ fn parse_op(s: &str) -> Result<InvariantOperator> {
         "le" | "<=" => LessOrEqual,
         "ge" | ">=" => GreaterOrEqual,
         "contains" => Contains,
-        "not_contains" | "notcontains" => Contains,
+        "not_contains" | "notcontains" => NotContains,
         other => anyhow::bail!("unknown invariant op: {other}"),
     })
 }

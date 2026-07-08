@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
         Cmd::Cognitive(c) => run_cognitive(&mut ctx, c, format),
         Cmd::Causal(c) => run_causal(&mut ctx, c, format),
         Cmd::Patterns(c) => run_patterns(&ctx, c, format),
-        Cmd::Provenance(c) => run_provenance(&ctx, c, format),
+        Cmd::Provenance(c) => run_provenance(&mut ctx, c, format),
         Cmd::Intel(c) => run_intel(&mut ctx, c, format),
         Cmd::Intent(c) => run_intent(&mut ctx, c, format),
         Cmd::Antifragile(c) => run_antifragile(&ctx, c, format),
@@ -170,7 +170,7 @@ fn run_causal(ctx: &mut Ctx, c: nexus_cog_cli::cli::CausalCmd, format: OutputFor
         C::AddNode { id, name, r#type, description } => {
             causal::add_node(ctx, &id, &name, Some(&r#type), Some(&description))?
         }
-        C::AddEdge { from, to } => causal::add_edge(ctx, &from, &to)?,
+        C::AddEdge { from, to } => causal::add_edge(ctx, &from, &to, None, None)?,
         C::Forward { entity } => causal::forward(ctx, &entity)?,
         C::Backward { entity } => causal::backward(ctx, &entity)?,
         C::Counterfactual { entity } => causal::counterfactual(ctx, &entity)?,
@@ -192,7 +192,7 @@ fn run_patterns(ctx: &Ctx, c: nexus_cog_cli::cli::PatternsCmd, format: OutputFor
     Ok(())
 }
 
-fn run_provenance(ctx: &Ctx, c: nexus_cog_cli::cli::ProvenanceCmd, format: OutputFormat) -> Result<()> {
+fn run_provenance(ctx: &mut Ctx, c: nexus_cog_cli::cli::ProvenanceCmd, format: OutputFormat) -> Result<()> {
     use nexus_cog_cli::cli::ProvenanceCmd as P;
     let v = match c {
         P::Record { artifact, origin, content, source, prompt } => {
@@ -216,7 +216,7 @@ fn run_intel(ctx: &mut Ctx, c: nexus_cog_cli::cli::IntelCmd, format: OutputForma
         I::LearnerStats => intel::learner_stats(ctx)?,
         I::Predict { task, tools } => intel::predict(ctx, &task, &tools)?,
         I::Record { task, success, quality, rounds, tools } => {
-            intel::record_interaction(ctx, &task, success, Some(quality), Some(rounds), tools)?
+            intel::record_interaction(ctx, &task, Some(success), Some(quality), Some(rounds), tools)?
         }
         I::Suggest { task, complexity } => {
             intel::suggest_approach(ctx, &task, Some(&complexity))?

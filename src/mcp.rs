@@ -64,17 +64,22 @@ impl NexusCogMcp {
 }
 
 fn empty_schema() -> Arc<serde_json::Map<String, Value>> {
-    Arc::new(serde_json::Map::new())
+    let mut m = serde_json::Map::new();
+    m.insert("type".into(), json!("object"));
+    Arc::new(m)
 }
 
+/// Build a JSON-Schema object from a list of (name, type, description) triples.
+/// `required` is the subset that must be present.
 fn object_schema(
-    properties: &[(&str, &str)],
+    properties: &[(&str, &str, &str)],
     required: &[&str],
 ) -> Arc<serde_json::Map<String, Value>> {
     let mut props = serde_json::Map::new();
-    for (k, v_type) in properties {
+    for (k, v_type, desc) in properties {
         let mut p = serde_json::Map::new();
         p.insert("type".into(), json!(*v_type));
+        p.insert("description".into(), json!(*desc));
         props.insert((*k).into(), Value::Object(p));
     }
     let mut m = serde_json::Map::new();
@@ -95,61 +100,402 @@ fn build_tool(name: &str, description: &str, input_schema: Arc<serde_json::Map<S
 pub fn all_tools() -> Vec<Tool> {
     let mut tools = Vec::new();
 
+    // ---------- Palace ----------
     tools.push(build_tool("palace_rooms", "List palace rooms.", empty_schema()));
-    tools.push(build_tool("palace_summary", "Palace summary.", empty_schema()));
-    tools.push(build_tool("palace_add_room", "Add a new room to the palace.", object_schema(&[("name", "string"), ("type", "string")], &["name", "type"])));
-    tools.push(build_tool("palace_add_item", "Add an item to a room.", object_schema(&[("room_id", "string"), ("key", "string"), ("value", "string")], &["room_id", "key", "value"])));
-    tools.push(build_tool("palace_recall", "Semantic recall across the palace.", object_schema(&[("query", "string")], &["query"])));
-    tools.push(build_tool("palace_connect", "Connect two rooms.", object_schema(&[("from", "string"), ("to", "string"), ("relation", "string")], &["from", "to", "relation"])));
+    tools.push(build_tool("palace_summary", "Palace summary (rooms / items / connections).", empty_schema()));
+    tools.push(build_tool(
+        "palace_add_room",
+        "Add a new room to the palace. `type` is one of: concept, pattern, decision, bug, learning, tool, user, project.",
+        object_schema(
+            &[
+                ("name", "string", "Human-readable room name."),
+                ("type", "string", "Room type (see description)."),
+            ],
+            &["name", "type"],
+        ),
+    ));
+    tools.push(build_tool(
+        "palace_add_item",
+        "Add an item to a room.",
+        object_schema(
+            &[
+                ("room_id", "string", "Target room ID."),
+                ("key", "string", "Item key (unique within the room)."),
+                ("value", "string", "Item value."),
+                ("confidence", "number", "Optional confidence in [0,1]; defaults to 0.5."),
+                ("tags", "array", "Optional array of tag strings."),
+            ],
+            &["room_id", "key", "value"],
+        ),
+    ));
+    tools.push(build_tool(
+        "palace_recall",
+        "Semantic recall across the palace.",
+        object_schema(
+            &[
+                ("query", "string", "Free-form search query."),
+                ("limit", "integer", "Max results; defaults to 10."),
+            ],
+            &["query"],
+        ),
+    ));
+    tools.push(build_tool(
+        "palace_connect",
+        "Connect two rooms.",
+        object_schema(
+            &[
+                ("from", "string", "Source room ID."),
+                ("to", "string", "Target room ID."),
+                ("relation", "string", "Relation label (e.g. 'uses')."),
+                ("strength", "number", "Optional strength in [0,1]; defaults to 0.5."),
+            ],
+            &["from", "to", "relation"],
+        ),
+    ));
 
-    tools.push(build_tool("brain_verify", "Run the 8-check code verifier.", object_schema(&[("code", "string")], &["code"])));
-    tools.push(build_tool("brain_risks", "Detect security/performance/reliability risks.", object_schema(&[("code", "string")], &["code"])));
-    tools.push(build_tool("brain_search", "Semantic code search.", object_schema(&[("query", "string"), ("code", "string")], &["query", "code"])));
-    tools.push(build_tool("brain_architecture", "Architecture analysis of a code corpus.", object_schema(&[("code", "string")], &["code"])));
-    tools.push(build_tool("brain_diff", "Semantic diff between two versions.", object_schema(&[("old", "string"), ("new", "string"), ("file", "string")], &["old", "new", "file"])));
-    tools.push(build_tool("brain_hypothesis", "Propose an A/B hypothesis.", object_schema(&[("title", "string"), ("description", "string"), ("code_a", "string"), ("code_b", "string")], &["title", "description", "code_a", "code_b"])));
+    // ---------- Brain ----------
+    tools.push(build_tool(
+        "brain_verify",
+        "Run the 8-check code verifier.",
+        object_schema(
+            &[
+                ("code", "string", "Source code to verify."),
+                ("language", "string", "Optional language hint (e.g. 'rust')."),
+            ],
+            &["code"],
+        ),
+    ));
+    tools.push(build_tool(
+        "brain_risks",
+        "Detect security/performance/reliability risks.",
+        object_schema(
+            &[
+                ("code", "string", "Source code to analyse."),
+                ("file", "string", "Optional filename for context."),
+            ],
+            &["code"],
+        ),
+    ));
+    tools.push(build_tool(
+        "brain_search",
+        "Semantic code search over a code corpus.",
+        object_schema(
+            &[
+                ("query", "string", "Search query."),
+                ("code", "string", "Inline source corpus (single virtual file)."),
+                ("path", "string", "Optional virtual path for the inline corpus."),
+            ],
+            &["query", "code"],
+        ),
+    ));
+    tools.push(build_tool(
+        "brain_architecture",
+        "Architecture analysis of a code corpus.",
+        object_schema(
+            &[
+                ("code", "string", "Inline source corpus."),
+                ("path", "string", "Optional virtual path."),
+            ],
+            &["code"],
+        ),
+    ));
+    tools.push(build_tool(
+        "brain_diff",
+        "Semantic diff between two versions.",
+        object_schema(
+            &[
+                ("file", "string", "Filename used in the report."),
+                ("old", "string", "Original source."),
+                ("new", "string", "New source."),
+            ],
+            &["file", "old", "new"],
+        ),
+    ));
+    tools.push(build_tool(
+        "brain_hypothesis",
+        "Propose an A/B hypothesis comparing two code approaches.",
+        object_schema(
+            &[
+                ("title", "string", "Short title."),
+                ("description", "string", "What the hypothesis is about."),
+                ("code_a", "string", "Source code of approach A."),
+                ("code_b", "string", "Source code of approach B."),
+            ],
+            &["title", "description", "code_a", "code_b"],
+        ),
+    ));
 
-    tools.push(build_tool("cognitive_think", "Run the 6-phase cognitive scaffold.", object_schema(&[("task", "string")], &["task"])));
-    tools.push(build_tool("cognitive_mirror", "Audit a response reasoning.", object_schema(&[("subject", "string"), ("response", "string")], &["subject", "response"])));
+    // ---------- Cognitive ----------
+    tools.push(build_tool(
+        "cognitive_think",
+        "Run the 6-phase cognitive scaffold.",
+        object_schema(
+            &[
+                ("task", "string", "Task description."),
+                ("context", "string", "Optional context snippet."),
+            ],
+            &["task"],
+        ),
+    ));
+    tools.push(build_tool(
+        "cognitive_mirror",
+        "Audit a response for completeness and consistency.",
+        object_schema(
+            &[
+                ("subject", "string", "Subject of the response."),
+                ("response", "string", "Response text to audit."),
+            ],
+            &["subject", "response"],
+        ),
+    ));
     tools.push(build_tool("cognitive_chain_start", "Start a thought chain.", empty_schema()));
-    tools.push(build_tool("cognitive_chain_add", "Add a thought to the chain.", object_schema(&[("type", "string"), ("content", "string")], &["type", "content"])));
-    tools.push(build_tool("cognitive_analyze_response", "Analyze a response.", object_schema(&[("response", "string")], &["response"])));
+    tools.push(build_tool(
+        "cognitive_chain_add",
+        "Add a thought to the chain.",
+        object_schema(
+            &[
+                ("type", "string", "Thought type: problem|analysis|hypothesis|verification|reflection|decision|implementation|question."),
+                ("content", "string", "The thought text."),
+                ("confidence", "number", "Optional confidence in [0,1]."),
+            ],
+            &["type", "content"],
+        ),
+    ));
+    tools.push(build_tool(
+        "cognitive_analyze_response",
+        "Analyze a response.",
+        object_schema(&[("response", "string", "Response text.")], &["response"]),
+    ));
 
-    tools.push(build_tool("causal_add_node", "Add a causal node.", object_schema(&[("id", "string"), ("name", "string")], &["id", "name"])));
-    tools.push(build_tool("causal_add_edge", "Add a causal edge.", object_schema(&[("from", "string"), ("to", "string")], &["from", "to"])));
-    tools.push(build_tool("causal_forward", "Forward impact chain.", object_schema(&[("entity", "string")], &["entity"])));
-    tools.push(build_tool("causal_backward", "Backward impact chain.", object_schema(&[("entity", "string")], &["entity"])));
-    tools.push(build_tool("causal_counterfactual", "Counterfactual analysis.", object_schema(&[("entity", "string")], &["entity"])));
-    tools.push(build_tool("causal_pre_mortem", "Pre-mortem analysis.", object_schema(&[("entity", "string")], &["entity"])));
-    tools.push(build_tool("causal_dump", "Snapshot the causal graph.", empty_schema()));
+    // ---------- Causal ----------
+    tools.push(build_tool(
+        "causal_add_node",
+        "Add a causal node.",
+        object_schema(
+            &[
+                ("id", "string", "Stable node ID."),
+                ("name", "string", "Short human name."),
+                ("type", "string", "Node type: code_entity|behavior|feature|invariant|assumption|decision|constraint|bug|external_dep."),
+                ("description", "string", "Optional longer description."),
+            ],
+            &["id", "name"],
+        ),
+    ));
+    tools.push(build_tool(
+        "causal_add_edge",
+        "Add a causal edge.",
+        object_schema(
+            &[
+                ("from", "string", "Source node ID."),
+                ("to", "string", "Target node ID."),
+                ("type", "string", "Edge type: causes|enables|prevents|mitigates|correlates."),
+                ("strength", "number", "Optional strength in [0,1]; defaults to 0.5."),
+            ],
+            &["from", "to"],
+        ),
+    ));
+    tools.push(build_tool(
+        "causal_forward",
+        "Forward impact chain.",
+        object_schema(&[("entity", "string", "Source node ID.")], &["entity"]),
+    ));
+    tools.push(build_tool(
+        "causal_backward",
+        "Backward impact chain.",
+        object_schema(&[("entity", "string", "Target node ID.")], &["entity"]),
+    ));
+    tools.push(build_tool(
+        "causal_counterfactual",
+        "Counterfactual analysis — derives changes that would have prevented `entity`.",
+        object_schema(&[("entity", "string", "Outcome node ID.")], &["entity"]),
+    ));
+    tools.push(build_tool(
+        "causal_pre_mortem",
+        "Pre-mortem analysis — failure scenarios derived from the graph.",
+        object_schema(&[("entity", "string", "Subject node ID.")], &["entity"]),
+    ));
+    tools.push(build_tool(
+        "causal_blast",
+        "Blast-radius analysis for a proposed change.",
+        object_schema(&[("entity", "string", "Changed entity.")], &["entity"]),
+    ));
+    tools.push(build_tool("causal_dump", "Snapshot the causal graph as JSON.", empty_schema()));
 
-    tools.push(build_tool("patterns_list", "List patterns.", empty_schema()));
-    tools.push(build_tool("patterns_match", "Match known patterns in code.", object_schema(&[("code", "string")], &["code"])));
-    tools.push(build_tool("patterns_suggest", "Suggest a pattern for a task.", object_schema(&[("task", "string")], &["task"])));
+    // ---------- Patterns ----------
+    tools.push(build_tool("patterns_list", "List known patterns.", empty_schema()));
+    tools.push(build_tool(
+        "patterns_match",
+        "Match known patterns in code.",
+        object_schema(
+            &[
+                ("code", "string", "Source code."),
+                ("language", "string", "Optional language; defaults to 'rust'."),
+            ],
+            &["code"],
+        ),
+    ));
+    tools.push(build_tool(
+        "patterns_suggest",
+        "Suggest a pattern for a task.",
+        object_schema(
+            &[
+                ("task", "string", "Task description."),
+                ("language", "string", "Optional language; defaults to 'rust'."),
+            ],
+            &["task"],
+        ),
+    ));
 
-    tools.push(build_tool("provenance_record", "Record a provenance entry.", object_schema(&[("artifact", "string"), ("origin", "string"), ("content", "string"), ("source", "string"), ("prompt", "string")], &["artifact", "origin", "content", "source", "prompt"])));
-    tools.push(build_tool("provenance_explain", "Explain artifact lineage.", object_schema(&[("id", "string")], &["id"])));
-    tools.push(build_tool("provenance_search", "Search provenance records.", object_schema(&[("query", "string")], &["query"])));
+    // ---------- Provenance ----------
+    tools.push(build_tool(
+        "provenance_record",
+        "Record a provenance entry.",
+        object_schema(
+            &[
+                ("artifact", "string", "Artifact identifier (e.g. file path)."),
+                ("origin", "string", "Origin (model name, tool name, etc.)."),
+                ("content", "string", "Artifact content."),
+                ("source", "string", "Source: model_output|tool_execution|test_run|user_input|reasoning|code_extraction|file_load|composition|inference."),
+                ("prompt", "string", "Prompt that produced the artifact."),
+            ],
+            &["artifact", "origin", "content", "source", "prompt"],
+        ),
+    ));
+    tools.push(build_tool(
+        "provenance_explain",
+        "Explain artifact lineage.",
+        object_schema(&[("id", "string", "Record ID.")], &["id"]),
+    ));
+    tools.push(build_tool(
+        "provenance_search",
+        "Search provenance records.",
+        object_schema(&[("query", "string", "Search query.")], &["query"]),
+    ));
+    tools.push(build_tool("provenance_snapshot", "Snapshot the full provenance graph.", empty_schema()));
 
-    tools.push(build_tool("intel_recall", "Recall long-term memory.", object_schema(&[("query", "string")], &["query"])));
-    tools.push(build_tool("intel_store", "Store a long-term memory entry.", object_schema(&[("key", "string"), ("value", "string")], &["key", "value"])));
+    // ---------- Intel ----------
+    tools.push(build_tool(
+        "intel_recall",
+        "Recall long-term memory via ranked token overlap.",
+        object_schema(&[("query", "string", "Free-form query.")], &["query"]),
+    ));
+    tools.push(build_tool(
+        "intel_store",
+        "Store a long-term memory entry. `category` is required (no silent default).",
+        object_schema(
+            &[
+                ("key", "string", "Stable key."),
+                ("value", "string", "Stored value."),
+                ("category", "string", "decision|pattern|error|learning|preference|context|fact|reference."),
+                ("importance", "number", "Optional importance in [0,1]; defaults to 0.7."),
+            ],
+            &["key", "value", "category"],
+        ),
+    ));
     tools.push(build_tool("intel_stats", "Memory statistics.", empty_schema()));
     tools.push(build_tool("intel_learner_stats", "Learner statistics.", empty_schema()));
-    tools.push(build_tool("intel_predict", "Predict task success.", object_schema(&[("task", "string")], &["task"])));
-    tools.push(build_tool("intel_record_interaction", "Record an interaction outcome.", object_schema(&[("task", "string"), ("success", "string")], &["task", "success"])));
-    tools.push(build_tool("intel_suggest_approach", "Suggest approach.", object_schema(&[("task", "string")], &["task"])));
+    tools.push(build_tool(
+        "intel_predict",
+        "Predict task success.",
+        object_schema(
+            &[
+                ("task", "string", "Task description."),
+                ("tools", "array", "Optional list of available tool names."),
+            ],
+            &["task"],
+        ),
+    ));
+    tools.push(build_tool(
+        "intel_record_interaction",
+        "Record an interaction outcome. `success` is bool or 'true'/'false' string.",
+        object_schema(
+            &[
+                ("task", "string", "Task description."),
+                ("success", "boolean", "Whether the task succeeded."),
+                ("quality", "number", "Optional quality score in [0,1]."),
+                ("rounds", "integer", "Optional rounds taken."),
+                ("tools", "array", "Optional list of tools used."),
+            ],
+            &["task", "success"],
+        ),
+    ));
+    tools.push(build_tool(
+        "intel_suggest_approach",
+        "Suggest an approach based on historical data.",
+        object_schema(
+            &[
+                ("task", "string", "Task description."),
+                ("complexity", "string", "Optional complexity: trivial|low|medium|high|expert."),
+            ],
+            &["task"],
+        ),
+    ));
 
-    tools.push(build_tool("intent_declare", "Declare module intent.", object_schema(&[("module", "string"), ("purpose", "string")], &["module", "purpose"])));
-    tools.push(build_tool("intent_check", "Check intent against code.", object_schema(&[("module", "string"), ("current_code", "string")], &["module", "current_code"])));
-    tools.push(build_tool("intent_drift", "Record intent drift.", object_schema(&[("module", "string"), ("observation", "string")], &["module", "observation"])));
+    // ---------- Intent ----------
+    tools.push(build_tool(
+        "intent_declare",
+        "Declare module intent.",
+        object_schema(
+            &[
+                ("module", "string", "Module name."),
+                ("purpose", "string", "What the module is supposed to do."),
+            ],
+            &["module", "purpose"],
+        ),
+    ));
+    tools.push(build_tool(
+        "intent_check",
+        "Check intent against a code snippet.",
+        object_schema(
+            &[
+                ("module", "string", "Module name (must have been declared)."),
+                ("current_code", "string", "Source code snippet to inspect."),
+            ],
+            &["module", "current_code"],
+        ),
+    ));
+    tools.push(build_tool(
+        "intent_drift",
+        "Record intent drift.",
+        object_schema(
+            &[
+                ("module", "string", "Module name."),
+                ("observation", "string", "What drifted."),
+                ("drift_score", "number", "Optional drift score in [0,1]; defaults to 0.5."),
+            ],
+            &["module", "observation"],
+        ),
+    ));
     tools.push(build_tool("intent_index", "Intent preservation index.", empty_schema()));
 
-    tools.push(build_tool("antifragile_adversarial", "Generate adversarial inputs.", empty_schema()));
-    tools.push(build_tool("antifragile_edge", "Explore edge cases.", object_schema(&[("code", "string"), ("target", "string")], &["code", "target"])));
+    // ---------- Antifragile ----------
+    tools.push(build_tool(
+        "antifragile_adversarial",
+        "Generate adversarial inputs.",
+        object_schema(
+            &[("target", "string", "Optional target description.")],
+            &[],
+        ),
+    ));
+    tools.push(build_tool(
+        "antifragile_edge",
+        "Explore edge cases for a piece of code.",
+        object_schema(
+            &[
+                ("code", "string", "Source code."),
+                ("target", "string", "Target name."),
+            ],
+            &["code", "target"],
+        ),
+    ));
 
-    tools.push(build_tool("backup_json", "Export palace to JSON.", object_schema(&[("out", "string")], &["out"])));
-
-    tools.push(build_tool("decay_apply", "Apply memory decay.", empty_schema()));
+    // ---------- Maintenance ----------
+    tools.push(build_tool(
+        "backup_json",
+        "Export palace to JSON.",
+        object_schema(&[("out", "string", "Destination file path.")], &["out"]),
+    ));
+    tools.push(build_tool("decay_apply", "Apply memory decay with default config.", empty_schema()));
 
     tools
 }
@@ -159,6 +505,22 @@ fn req_str(args: &HashMap<String, Value>, key: &str) -> Result<String> {
         .and_then(|v| v.as_str())
         .map(String::from)
         .ok_or_else(|| anyhow::anyhow!("missing required field `{key}`"))
+}
+
+/// Parse a `success`-shaped field that may arrive as either a JSON bool or a
+/// JSON string (`"true"`/`"false"`/`"1"`/`"0"`). Returns `None` only when the
+/// field is missing entirely, in which case the caller decides on a default.
+fn parse_success(v: Option<&Value>) -> Option<bool> {
+    match v? {
+        Value::Bool(b) => Some(*b),
+        Value::String(s) => match s.trim().to_lowercase().as_str() {
+            "true" | "1" | "yes" | "y" | "success" | "ok" => Some(true),
+            "false" | "0" | "no" | "n" | "fail" | "failure" | "error" => Some(false),
+            _ => None,
+        },
+        Value::Number(n) => n.as_i64().map(|i| i != 0),
+        _ => None,
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -191,7 +553,7 @@ pub async fn dispatch(
         "cognitive_analyze_response" => { let c = ctx.read().await; commands::cognitive::analyze_response(&c, &req_str(&args, "response")?) }
 
         "causal_add_node" => { let mut c = ctx.write().await; commands::causal::add_node(&mut c, &req_str(&args, "id")?, &req_str(&args, "name")?, args.get("type").and_then(|v| v.as_str()), args.get("description").and_then(|v| v.as_str())) }
-        "causal_add_edge" => { let mut c = ctx.write().await; commands::causal::add_edge(&mut c, &req_str(&args, "from")?, &req_str(&args, "to")?) }
+        "causal_add_edge" => { let mut c = ctx.write().await; commands::causal::add_edge(&mut c, &req_str(&args, "from")?, &req_str(&args, "to")?, args.get("type").and_then(|v| v.as_str()), args.get("strength").and_then(|v| v.as_f64())) }
         "causal_forward" => { let c = ctx.read().await; commands::causal::forward(&c, &req_str(&args, "entity")?) }
         "causal_backward" => { let c = ctx.read().await; commands::causal::backward(&c, &req_str(&args, "entity")?) }
         "causal_counterfactual" => { let c = ctx.read().await; commands::causal::counterfactual(&c, &req_str(&args, "entity")?) }
@@ -205,19 +567,20 @@ pub async fn dispatch(
         "provenance_record" => { let mut c = ctx.write().await; commands::provenance::record(&mut c, &req_str(&args, "artifact")?, &req_str(&args, "origin")?, &req_str(&args, "content")?, &req_str(&args, "source")?, &req_str(&args, "prompt")?) }
         "provenance_explain" => { let c = ctx.read().await; commands::provenance::explain(&c, &req_str(&args, "id")?) }
         "provenance_search" => { let c = ctx.read().await; commands::provenance::search(&c, &req_str(&args, "query")?) }
+        "provenance_snapshot" => { let c = ctx.read().await; commands::provenance::snapshot(&c) }
 
-        "intel_recall" => { let c = ctx.read().await; commands::intel::recall(&c, &req_str(&args, "query")?) }
+        "intel_recall" => { let mut c = ctx.write().await; commands::intel::recall(&mut c, &req_str(&args, "query")?) }
         "intel_store" => { let mut c = ctx.write().await; commands::intel::store(&mut c, &req_str(&args, "key")?, &req_str(&args, "value")?, args.get("category").and_then(|v| v.as_str()), args.get("importance").and_then(|v| v.as_f64())) }
         "intel_stats" => { let c = ctx.read().await; commands::intel::stats(&c) }
         "intel_learner_stats" => { let c = ctx.read().await; commands::intel::learner_stats(&c) }
         "intel_predict" => { let c = ctx.read().await; let tools: Vec<String> = args.get("tools").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default(); commands::intel::predict(&c, &req_str(&args, "task")?, &tools) }
-        "intel_record_interaction" => { let mut c = ctx.write().await; commands::intel::record_interaction(&mut c, &req_str(&args, "task")?, args.get("success").and_then(|v| v.as_bool()).unwrap_or(true), args.get("quality").and_then(|v| v.as_f64()), args.get("rounds").and_then(|v| v.as_u64()).map(|n| n as u32), args.get("tools").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()) }
+        "intel_record_interaction" => { let mut c = ctx.write().await; commands::intel::record_interaction(&mut c, &req_str(&args, "task")?, parse_success(args.get("success")), args.get("quality").and_then(|v| v.as_f64()), args.get("rounds").and_then(|v| v.as_u64()).map(|n| n as u32), args.get("tools").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()) }
         "intel_suggest_approach" => { let c = ctx.read().await; commands::intel::suggest_approach(&c, &req_str(&args, "task")?, args.get("complexity").and_then(|v| v.as_str())) }
 
         "intent_declare" => { let mut c = ctx.write().await; commands::intent::declare(&mut c, &req_str(&args, "module")?, &req_str(&args, "purpose")?) }
-        "intent_check" => { let c = ctx.read().await; commands::intent::check(&c, &req_str(&args, "module")?, &req_str(&args, "current_code")?) }
+        "intent_check" => { let mut c = ctx.write().await; commands::intent::check(&mut c, &req_str(&args, "module")?, &req_str(&args, "current_code")?) }
         "intent_drift" => { let mut c = ctx.write().await; commands::intent::drift(&mut c, &req_str(&args, "module")?, &req_str(&args, "observation")?, args.get("drift_score").and_then(|v| v.as_f64())) }
-        "intent_index" => { let mut c = ctx.write().await; commands::intent::index(&mut c) }
+        "intent_index" => { let c = ctx.read().await; commands::intent::index(&c) }
 
         "antifragile_adversarial" => { let c = ctx.read().await; commands::antifragile::adversarial(&c, args.get("target").and_then(|v| v.as_str())) }
         "antifragile_edge" => { let c = ctx.read().await; commands::antifragile::edge_cases(&c, &req_str(&args, "code")?, &req_str(&args, "target")?) }

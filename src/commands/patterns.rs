@@ -6,11 +6,10 @@ use serde_json::Value;
 use crate::ctx::Ctx;
 
 pub fn list(ctx: &Ctx) -> Result<Value> {
-    let matches = ctx.engines.patterns.match_code("", "rust");
-    let _ = matches;
-    // There is no `list` method on PatternMatcher — return empty marker.
+    let patterns = ctx.engines.patterns.patterns();
     Ok(serde_json::json!({
-        "hint": "patterns are matched on demand via `match`; use `nexus-cog patterns match <code>`"
+        "count": patterns.len(),
+        "patterns": patterns,
     }))
 }
 
@@ -23,5 +22,11 @@ pub fn match_code(ctx: &Ctx, code: &str, language: Option<&str>) -> Result<Value
 pub fn suggest(ctx: &Ctx, task: &str, language: Option<&str>) -> Result<Value> {
     let lang = language.unwrap_or("rust");
     let p = ctx.engines.patterns.suggest_pattern(task, lang);
-    Ok(serde_json::to_value(p)?)
+    match p {
+        Some(pat) => Ok(serde_json::to_value(pat)?),
+        None => Ok(serde_json::json!({
+            "suggestion": null,
+            "hint": "no pattern matched; provide more task context or call patterns_list to see available patterns",
+        })),
+    }
 }

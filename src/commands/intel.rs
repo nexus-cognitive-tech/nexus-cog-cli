@@ -7,8 +7,8 @@ use serde_json::Value;
 
 use crate::ctx::Ctx;
 
-pub fn recall(ctx: &Ctx, query: &str) -> Result<Value> {
-    let hits = ctx.engines.ltm.search(query);
+pub fn recall(ctx: &mut Ctx, query: &str) -> Result<Value> {
+    let hits = ctx.engines.ltm.search(query, 10);
     Ok(serde_json::to_value(hits)?)
 }
 
@@ -19,11 +19,14 @@ pub fn store(
     category: Option<&str>,
     importance: Option<f64>,
 ) -> Result<Value> {
-    let cat = parse_category(category.unwrap_or("learning"))?;
+    // Category is semantic — refuse to store with an implicit default.
+    let category = category
+        .ok_or_else(|| anyhow::anyhow!("intel_store requires `category` (decision|pattern|error|learning|preference|context|fact|reference); refusing silent default"))?;
+    let cat = parse_category(category)?;
     ctx.engines
         .ltm
         .store(key, value, cat, importance.unwrap_or(0.7) as f32);
-    Ok(serde_json::json!({ "key": key, "ok": true }))
+    Ok(serde_json::json!({ "key": key, "category": cat.id(), "ok": true }))
 }
 
 pub fn stats(ctx: &Ctx) -> Result<Value> {
@@ -44,11 +47,13 @@ pub fn predict(ctx: &Ctx, task: &str, tools: &[String]) -> Result<Value> {
 pub fn record_interaction(
     ctx: &mut Ctx,
     task: &str,
-    success: bool,
+    success: Option<bool>,
     quality: Option<f64>,
     rounds: Option<u32>,
     tools: Vec<String>,
 ) -> Result<Value> {
+    let success = success
+        .ok_or_else(|| anyhow::anyhow!("intel_record_interaction requires `success` (bool or 'true'/'false'); refusing implicit default"))?;
     let interaction = Interaction {
         id: format!("int-{}", uuid::Uuid::new_v4()),
         task: task.to_string(),
@@ -66,7 +71,7 @@ pub fn record_interaction(
         error: None,
     };
     ctx.engines.learner.record_interaction(interaction);
-    Ok(serde_json::json!({ "ok": true }))
+    Ok(serde_json::json!({ "task": task, "success": success, "ok": true }))
 }
 
 pub fn suggest_approach(ctx: &Ctx, task: &str, complexity: Option<&str>) -> Result<Value> {
