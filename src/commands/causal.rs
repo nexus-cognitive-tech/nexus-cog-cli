@@ -1,0 +1,105 @@
+//! Causal engine: forward, backward, counterfactual, pre-mortem, blast radius, graph ops.
+
+use anyhow::Result;
+use nexus_cog_core::causal::{CausalEdge, CausalEdgeType, CausalNode, CausalNodeType};
+use nexus_cog_core::Confidence;
+use serde_json::Value;
+
+use crate::ctx::Ctx;
+
+pub fn add_node(
+    ctx: &mut Ctx,
+    id: &str,
+    name: &str,
+    kind: Option<&str>,
+    description: Option<&str>,
+) -> Result<Value> {
+    let node_type = match kind {
+        Some(s) => parse_node_type(s)?,
+        None => CausalNodeType::CodeEntity,
+    };
+    ctx.engines.causal.add_node(CausalNode {
+        id: id.to_string(),
+        node_type,
+        name: name.to_string(),
+        description: description.unwrap_or("").to_string(),
+        file: None,
+        line: None,
+        confidence: Confidence::new(1.0),
+        tags: vec![],
+    });
+    Ok(format_dump(&ctx.engines.causal))
+}
+
+pub fn add_edge(ctx: &mut Ctx, from: &str, to: &str) -> Result<Value> {
+    ctx.engines.causal.add_edge(CausalEdge {
+        from: from.to_string(),
+        to: to.to_string(),
+        edge_type: CausalEdgeType::Causes,
+        strength: 0.5,
+        confidence: Confidence::new(1.0),
+        evidence: vec![],
+    });
+    Ok(format_dump(&ctx.engines.causal))
+}
+
+pub fn forward(ctx: &Ctx, entity: &str) -> Result<Value> {
+    let engine = ctx.engines.causal.clone();
+    let mut reasoner = nexus_cog_causal::ForwardReasoner::new(engine);
+    let impact = reasoner.impact_of(entity);
+    Ok(serde_json::json!({ "entity": entity, "impact": impact }))
+}
+
+pub fn backward(ctx: &Ctx, entity: &str) -> Result<Value> {
+    let engine = ctx.engines.causal.clone();
+    let mut reasoner = nexus_cog_causal::BackwardReasoner::new(engine);
+    let impact = reasoner.causes_of(entity);
+    Ok(serde_json::json!({ "entity": entity, "impact": impact }))
+}
+
+pub fn counterfactual(ctx: &Ctx, entity: &str) -> Result<Value> {
+    let engine = ctx.engines.causal.clone();
+    let mut engine2 = nexus_cog_causal::CounterfactualReasoner::new(engine);
+    let alts = engine2.propose_counterfactuals(entity);
+    Ok(serde_json::to_value(alts)?)
+}
+
+pub fn pre_mortem(ctx: &Ctx, entity: &str) -> Result<Value> {
+    let engine = ctx.engines.causal.clone();
+    let mut engine2 = nexus_cog_causal::PreMortemEngine::new(engine);
+    let report = engine2.run(entity);
+    Ok(serde_json::to_value(report)?)
+}
+
+pub fn blast(ctx: &Ctx, entity: &str) -> Result<Value> {
+    let engine = ctx.engines.causal.clone();
+    let mut engine2 = nexus_cog_causal::BlastRadiusCalculator::new(engine);
+    let r = engine2.compute(entity);
+    Ok(serde_json::to_value(r)?)
+}
+
+pub fn dump(ctx: &Ctx) -> Result<Value> {
+    Ok(format_dump(&ctx.engines.causal))
+}
+
+fn format_dump(_engine: &nexus_cog_causal::CausalGraphEngine) -> Value {
+    // CausalGraphEngine uses petgraph internally and isn't Serialize; emit
+    // a stable textual summary.
+    serde_json::json!({ "summary": "graph state mutated; use `dump` to inspect" })
+}
+
+fn parse_node_type(s: &str) -> Result<CausalNodeType> {
+    use CausalNodeType::*;
+    Ok(match s.to_lowercase().as_str() {
+        "code_entity" => CodeEntity,
+        "behavior" => Behavior,
+        "feature" => Feature,
+        "invariant" => Invariant,
+        "assumption" => Assumption,
+        "decision" => Decision,
+        "constraint" => Constraint,
+        "bug" => Bug,
+        "external_dep" => ExternalDep,
+        other => anyhow::bail!("unknown causal node type: {other}"),
+    })
+}

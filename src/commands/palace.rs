@@ -1,30 +1,113 @@
-//! Palace subcommands.
+//! Palace engine subcommands.
 
 use anyhow::Result;
+use nexus_cog_core::palace::{MemoryItem, RoomType};
+use nexus_cog_palace::RecallOptions;
+use serde_json::{json, Value};
 
 use crate::ctx::Ctx;
 
-pub fn rooms(ctx: &Ctx) -> Result<()> {
-    for r in ctx.palace.rooms() {
-        println!("{} [{}] ({} items)", r.id, r.name, r.items.len());
-    }
-    Ok(())
+pub fn rooms(ctx: &Ctx) -> Result<Value> {
+    let rooms: Vec<Value> = ctx
+        .palace
+        .rooms()
+        .into_iter()
+        .map(|r| {
+            json!({
+                "id": r.id,
+                "name": r.name,
+                "type": r.room_type.id(),
+                "importance": r.importance,
+                "items": r.items.len(),
+                "tags": r.tags,
+            })
+        })
+        .collect();
+    Ok(json!({ "rooms": rooms, "count": rooms.len() }))
 }
 
-pub fn summary(ctx: &Ctx) -> Result<()> {
+pub fn summary(ctx: &Ctx) -> Result<Value> {
     let s = ctx.palace.summary();
-    println!(
-        "{} rooms, {} items, {} connections",
-        s.total_rooms, s.total_items, s.total_connections
-    );
-    Ok(())
+    Ok(json!({
+        "total_rooms": s.total_rooms,
+        "total_items": s.total_items,
+        "total_connections": s.total_connections,
+    }))
 }
 
-pub fn add_item(ctx: &Ctx, room: &str, key: &str, value: &str, confidence: f32) -> Result<()> {
-    use nexus_cog_core::palace::MemoryItem;
-    ctx.palace
-        .add_item(room, MemoryItem::new(key, value, confidence))?;
+pub fn add_room(ctx: &mut Ctx, name: &str, room_type: Option<&str>) -> Result<Value> {
+    let rt = match room_type {
+        Some(s) => parse_room_type(s)?,
+        None => RoomType::Concept,
+    };
+    let id = ctx.palace.add_room(name, rt)?;
     ctx.save()?;
-    println!("added `{}` to room `{}`", key, room);
-    Ok(())
+    Ok(json!({ "id": id, "name": name, "type": rt.id() }))
+}
+
+pub fn add_item(
+    ctx: &Ctx,
+    room_id: &str,
+    key: &str,
+    value: &str,
+    confidence: Option<f64>,
+    tags: Vec<String>,
+) -> Result<Value> {
+    let conf = confidence.unwrap_or(0.5) as f32;
+    let item = MemoryItem {
+        tags,
+        ..MemoryItem::new(key, value, conf)
+    };
+    ctx.palace.add_item(room_id, item)?;
+    ctx.save()?;
+    Ok(json!({ "room": room_id, "key": key, "ok": true }))
+}
+
+pub fn recall(ctx: &Ctx, query: &str, limit: usize) -> Result<Value> {
+    let opts = RecallOptions::default().with_limit(limit);
+    let results = ctx.palace.recall_semantic(query, opts);
+    let json_results: Vec<Value> = results
+        .into_iter()
+        .map(|r| {
+            json!({
+                "item": r.item,
+                "room_id": r.room_id,
+                "relevance": r.relevance,
+                "source": r.source,
+            })
+        })
+        .collect();
+    Ok(json!({ "query": query, "count": json_results.len(), "results": json_results }))
+}
+
+pub fn connect(ctx: &mut Ctx, from: &str, to: &str, relation: &str, strength: Option<f64>) -> Result<Value> {
+    let s = strength.unwrap_or(0.5) as f32;
+    ctx.palace.connect(from, to, relation, s)?;
+    ctx.save()?;
+    Ok(json!({ "from": from, "to": to, "relation": relation, "ok": true }))
+}
+
+pub fn decay(ctx: &Ctx) -> Result<Value> {
+    use nexus_cog_palace::DecayConfig;
+    let report = ctx.palace.apply_decay(&DecayConfig::default())?;
+    Ok(crate::commands::decay::report_to_value(&report))
+}
+
+pub fn export_json(ctx: &mut Ctx, out: &std::path::Path) -> Result<Value> {
+    ctx.palace.export_json(out)?;
+    Ok(json!({ "path": out.to_string_lossy(), "ok": true }))
+}
+
+fn parse_room_type(s: &str) -> Result<RoomType> {
+    Ok(match s.to_lowercase().as_str() {
+        "concept" => RoomType::Concept,
+        "pattern" => RoomType::Pattern,
+        "decision" => RoomType::Decision,
+        "bug" => RoomType::Bug,
+        "learning" => RoomType::Learning,
+        "tool" => RoomType::Tool,
+        "user" => RoomType::User,
+        "project" => RoomType::Project,
+        other => anyhow::bail!("unknown room type: {other}"),
+    })
 }
