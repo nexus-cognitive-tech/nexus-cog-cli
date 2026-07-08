@@ -1,6 +1,6 @@
 [package]
 name = "nexus-cog-cli"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Command-line interface for the Nexus Cog cognitive stack"
@@ -11,14 +11,6 @@ authors = ["Nexus Cognitive Technologies"]
 keywords = ["cli", "cognition", "agent"]
 categories = ["command-line-utilities"]
 readme = "README.md"
-
-[[bin]]
-name = "nexus-cog"
-path = "src/bin/nexus-cog.rs"
-
-[[bin]]
-name = "nexus-cog-mcp"
-path = "src/bin/nexus-cog-mcp.rs"
 
 [dependencies]
 nexus-cog-core = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-core", tag = "v0.1.0" }
@@ -57,3 +49,7 @@ parking_lot = "0.12"
 
 [dev-dependencies]
 tempfile = "3"
+
+[[bin]]
+name = "nexus-cog"
+path = "src/bin/nexus-cog.rs"

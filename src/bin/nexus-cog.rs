@@ -84,6 +84,21 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Repl => repl::run(&mut ctx, format),
+        Cmd::Mcp { db, palace } => {
+            // MCP server needs its own async runtime, separate Ctx, and its
+            // own args — so we re-derive them here and hand off to mcp::run.
+            drop(ctx); // release the synchronous Ctx before entering async
+            use nexus_cog_cli::mcp::{run as run_mcp, McpArgs};
+            let args = McpArgs {
+                db: db.map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "~/.local/share/nexus-cog/palace.db".into()),
+                palace: palace.unwrap_or_else(|| "default".into()),
+            };
+            // Initialise tracing early (main's init_tracing uses a different path).
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(run_mcp(args))?;
+            return Ok(());
+        }
     }
 }
 

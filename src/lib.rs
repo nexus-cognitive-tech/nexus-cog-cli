@@ -21,4 +21,5 @@ pub mod completion;
 pub mod config;
 pub mod ctx;
 pub mod format;
+pub mod mcp;
 pub mod repl;

@@ -107,6 +107,17 @@ pub enum Cmd {
 
     /// Show version + diagnostics.
     Doctor,
+
+    /// Run as an MCP server (stdio transport).
+    Mcp {
+        /// Path to the SQLite palace database.
+        #[arg(long, env = "NEXUS_COG_DB", default_value = "~/.local/share/nexus-cog/palace.db")]
+        db: Option<std::path::PathBuf>,
+
+        /// Palace namespace id.
+        #[arg(long, env = "NEXUS_COG_PALACE", default_value = "default")]
+        palace: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
