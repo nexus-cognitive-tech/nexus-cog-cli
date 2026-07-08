@@ -264,7 +264,9 @@ impl ServerHandler for NexusCogMcp {
     fn get_info(&self) -> InitializeResult {
         let server_info = Implementation::new("nexus-cog", env!("CARGO_PKG_VERSION"))
             .with_title("Nexus Cog");
-        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
+        InitializeResult::new(
+            ServerCapabilities::builder().enable_tools().build()
+        )
             .with_server_info(server_info)
             .with_instructions(
                 "Nexus Cog — cognitive tools for AI agents. \
