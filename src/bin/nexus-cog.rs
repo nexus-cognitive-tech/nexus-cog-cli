@@ -1,9 +1,11 @@
 //! `nexus-cog` — enterprise CLI entry point.
 //!
-//! See `cli.rs` for the clap definition; this file only wires up
-//! subcommands to their handlers and applies global flags.
+//! See `cli.rs` for the clap definition; this file wires subcommands to
+//! handlers and applies global flags. The MCP server mode is reached via
+//! the `mcp` subcommand — handled asynchronously by [`run_mcp`].
 
 use std::io::Write;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -18,9 +20,11 @@ use nexus_cog_cli::completion;
 use nexus_cog_cli::config::{CliConfig, Profile};
 use nexus_cog_cli::ctx::{expand_tilde, Ctx};
 use nexus_cog_cli::format::OutputFormat;
+use nexus_cog_cli::mcp::{run as run_mcp, McpArgs};
 use nexus_cog_cli::repl;
 
-fn main() -> Result<()> {
+#[tokio::main(flavor = "multi_thread")]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose.log_level_filter());
 
@@ -32,14 +36,12 @@ fn main() -> Result<()> {
         .db
         .clone()
         .or_else(|| profile.and_then(|p| p.db.clone()))
-        .unwrap_or_else(|| {
-            expand_tilde(&std::path::PathBuf::from(
-                "~/.local/share/nexus-cog/palace.db",
-            ))
-        });
+        .unwrap_or_else(|| expand_tilde(&PathBuf::from("~/.local/share/nexus-cog/palace.db")));
     let palace_id = match cli.palace.clone() {
         v if !v.is_empty() => v,
-        _ => profile.and_then(|p| p.palace.clone()).unwrap_or_else(|| "default".to_string()),
+        _ => profile
+            .and_then(|p| p.palace.clone())
+            .unwrap_or_else(|| "default".to_string()),
     };
     let format = cli.format;
 
@@ -60,13 +62,28 @@ fn main() -> Result<()> {
         Cmd::Config(cmd) => return run_config(cmd, format),
         Cmd::Embedder(cmd) => return run_embedder(cmd, format),
         Cmd::Doctor => return run_doctor(),
+        // The MCP server is handled asynchronously below.
+        Cmd::Mcp { db, palace } => {
+            let args = McpArgs {
+                db: db
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "~/.local/share/nexus-cog/palace.db".into()),
+                palace: palace.clone().unwrap_or_else(|| "default".into()),
+            };
+            // Drop any tracing init — rmcp owns the stdio pipe and tracing
+            // chatter on stderr can confuse some MCP hosts.
+            return run_mcp(args).await;
+        }
         _ => {}
     }
 
     let mut ctx = Ctx::open(db, palace_id.clone()).context("open palace")?;
 
     match cli.cmd {
-        Cmd::Config(_) | Cmd::Embedder(_) | Cmd::Completions { .. } | Cmd::Doctor => unreachable!(),
+        Cmd::Config(_) | Cmd::Embedder(_) | Cmd::Completions { .. } | Cmd::Doctor | Cmd::Mcp { .. } => {
+            unreachable!()
+        }
         Cmd::Palace(c) => run_palace(&mut ctx, c, format),
         Cmd::Brain(c) => run_brain(&ctx, c, format),
         Cmd::Cognitive(c) => run_cognitive(&mut ctx, c, format),
@@ -84,25 +101,9 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Repl => repl::run(&mut ctx, format),
-        Cmd::Mcp { db, palace } => {
-            // MCP server needs its own async runtime, separate Ctx, and its
-            // own args — so we re-derive them here and hand off to mcp::run.
-            drop(ctx); // release the synchronous Ctx before entering async
-            use nexus_cog_cli::mcp::{run as run_mcp, McpArgs};
-            let args = McpArgs {
-                db: db.map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "~/.local/share/nexus-cog/palace.db".into()),
-                palace: palace.unwrap_or_else(|| "default".into()),
-            };
-            // Initialise tracing early (main's init_tracing uses a different path).
-            let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(run_mcp(args))?;
-            return Ok(());
-        }
+        Cmd::Mcp { .. } => unreachable!(),
     }
 }
-
-// ──────── subcommand dispatchers ────────
 
 fn run_palace(ctx: &mut Ctx, c: nexus_cog_cli::cli::PalaceCmd, format: OutputFormat) -> Result<()> {
     use nexus_cog_cli::cli::PalaceCmd as P;
@@ -195,9 +196,7 @@ fn run_provenance(ctx: &Ctx, c: nexus_cog_cli::cli::ProvenanceCmd, format: Outpu
     use nexus_cog_cli::cli::ProvenanceCmd as P;
     let v = match c {
         P::Record { artifact, origin, content, source, prompt } => {
-            {
-                provenance::record(ctx, &artifact, &origin, &content, &source, &prompt)?
-            }
+            provenance::record(ctx, &artifact, &origin, &content, &source, &prompt)?
         }
         P::Explain { id } => provenance::explain(ctx, &id)?,
         P::Search { query } => provenance::search(ctx, &query)?,
@@ -219,7 +218,9 @@ fn run_intel(ctx: &mut Ctx, c: nexus_cog_cli::cli::IntelCmd, format: OutputForma
         I::Record { task, success, quality, rounds, tools } => {
             intel::record_interaction(ctx, &task, success, Some(quality), Some(rounds), tools)?
         }
-        I::Suggest { task, complexity } => intel::suggest_approach(ctx, &task, Some(&complexity))?,
+        I::Suggest { task, complexity } => {
+            intel::suggest_approach(ctx, &task, Some(&complexity))?
+        }
     };
     common::print(ctx, render_with(v, format))?;
     Ok(())
@@ -264,7 +265,9 @@ fn run_config(cmd: &nexus_cog_cli::cli::ConfigCmd, _format: OutputFormat) -> Res
     let v = match cmd {
         C::Show => config::show()?,
         C::Init => config::init()?,
-        C::AddProfile { name, db, palace } => config::add_profile(name, db.as_deref(), palace.as_deref())?,
+        C::AddProfile { name, db, palace } => {
+            config::add_profile(name, db.as_deref(), palace.as_deref())?
+        }
     };
     print!("{}", serde_json::to_string_pretty(&v)?);
     println!();
@@ -286,34 +289,26 @@ fn run_doctor() -> Result<()> {
     println!("binary: {}", std::env::current_exe()?.display());
     let v = serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
-        "rust_version": rustc_version_runtime(),
+        "rust_version": "rustc 1.x",
         "config": CliConfig::default_path().ok().map(|p| p.display().to_string()),
     });
     println!("{}", serde_json::to_string_pretty(&v)?);
     Ok(())
 }
 
-fn rustc_version_runtime() -> &'static str {
-    rustc_version_runtime()
-}
-
-fn init_tracing(level: log::LevelFilter) {
+fn init_tracing(_level: log::LevelFilter) {
     use tracing_subscriber::{fmt, EnvFilter};
     let filter = EnvFilter::builder()
-        // LevelFilter conversion not available; use string parsing instead
-        .with_default_directive(tracing_subscriber::filter::LevelFilter::from_level(tracing::Level::INFO).into())
+        .with_default_directive(
+            tracing_subscriber::filter::LevelFilter::from_level(tracing::Level::WARN).into(),
+        )
         .from_env_lossy();
-    let _ = fmt().with_env_filter(filter).with_writer(std::io::stderr).try_init();
+    let _ = fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
-// `value` is already a JSON Value; the formatter handles the format selection.
 fn render_with(value: serde_json::Value, _format: OutputFormat) -> serde_json::Value {
     value
 }
-
-// Helper used by `run_doctor`.
-fn rustc_version_runtime_static() -> &'static str {
-    "rustc (unknown)"
-}
-#[allow(dead_code)]
-fn _keep_symbol(_: &dyn Write) {}
