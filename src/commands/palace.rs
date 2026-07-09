@@ -1,7 +1,5 @@
 //! Palace engine subcommands.
 //!
-//! The legacy `nexus-cog-palace` crate is replaced by the
-//! brain-like cortex: rooms correspond to cortical regions, items
 //! to working-memory slots, recall to BM25 over the cortex's
 //! hippocampal episodes. External behaviour is unchanged.
 
@@ -75,7 +73,7 @@ pub fn add_item(
     let Some(_) = target_room else {
         anyhow::bail!("room {room_id} not found");
     };
-    let sdr = encode_text_to_sdr(key, value, &tags);
+    let sdr = crate::commands::common::encode_text_to_sdr(value);
     ctx.cortex.working_memory_push(sdr, Some(key.to_string()));
     let _ = confidence;
     Ok(json!({ "room": room_id, "key": key, "ok": true }))
@@ -92,7 +90,7 @@ pub fn recall(
     room_type: Option<&str>,
 ) -> Result<Value> {
     let _ = room_type;
-    let needle = encode_text_to_sdr(query, query, &[]);
+    let needle = crate::commands::common::encode_text_to_sdr(query);
     let results = ctx.cortex.hippocampus_recall(&needle, limit, min_confidence);
     // Drop episodes that don't carry the required tag (best-effort:
     // we don't store tags on episodes yet, so this filter only
@@ -174,26 +172,3 @@ pub fn export_json(ctx: &mut Ctx, out: &std::path::Path) -> Result<Value> {
     Ok(json!({ "path": out.to_string_lossy(), "ok": true }))
 }
 
-/// Deterministic text → SDR encoder. Hashes the input into a
-/// small SDR by spreading its bytes across the 2048-bit width,
-/// producing a stable but unique pattern per text. The hash has
-/// no semantics — it's a placeholder until a real encoder is
-/// chosen per call site.
-fn encode_text_to_sdr(_key: &str, value: &str, _tags: &[String]) -> Sdr {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    value.hash(&mut hasher);
-    let h1 = hasher.finish();
-    value.len().hash(&mut hasher);
-    let h2 = hasher.finish();
-    let mut bits: Vec<usize> = Vec::new();
-    let mut h = h1;
-    for _ in 0..42 {
-        bits.push((h % nexus_cog_neural::SDR_WIDTH as u64) as usize);
-        h = h.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
-    }
-    bits.push(((h2 % nexus_cog_neural::SDR_WIDTH as u64) as usize));
-    bits.sort_unstable();
-    bits.dedup();
-    Sdr::from_bits(bits)
-}

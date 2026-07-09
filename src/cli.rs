@@ -36,7 +36,6 @@ pub struct Cli {
 
     /// Palace namespace id.
     #[arg(long, global = true, default_value = "default", env = "NEXUS_COG_PALACE")]
-    pub palace: String,
 
     /// Named profile to use (from `~/.config/nexus-cog/config.toml`).
     #[arg(long, global = true)]
@@ -119,17 +118,13 @@ pub enum Cmd {
 
     /// Run as an MCP server (stdio transport).
     Mcp {
-        /// Path to the SQLite palace database (overrides `--workspace`).
+        /// Path to the SQLite database (overrides `--workspace`).
         #[arg(long, env = "NEXUS_COG_DB")]
         db: Option<std::path::PathBuf>,
 
         /// Workspace root — DB lives at `<workspace>/.nexus-cog/palace.db`.
         #[arg(long, env = "NEXUS_COG_WORKSPACE")]
         workspace: Option<std::path::PathBuf>,
-
-        /// Palace namespace id.
-        #[arg(long, env = "NEXUS_COG_PALACE", default_value = "default")]
-        palace: Option<String>,
     },
 }
 
@@ -200,7 +195,6 @@ pub enum BrainCmd {
     /// Run the 8-check code verifier.
     Verify {
         #[arg(long)] code: String,
-        #[arg(long, default_value = "rust")] language: String,
     },
     /// Detect risks (unsafe, unwrap, secrets, SQLi, deadlock).
     Risks {
@@ -212,7 +206,6 @@ pub enum BrainCmd {
         query: String,
         #[arg(long, default_value = "")] code: String,
         #[arg(long, default_value = "<inline>")] path: String,
-        #[arg(long)] language: Option<String>,
         #[arg(long)] limit: Option<usize>,
     },
     /// Architecture analysis.
@@ -237,7 +230,6 @@ pub enum BrainCmd {
         #[arg(long)] description: String,
         #[arg(long)] code_a: String,
         #[arg(long)] code_b: String,
-        #[arg(long)] language: Option<String>,
     },
     /// Analyse a file on disk: verify + risks + architecture.
     File {
@@ -318,15 +310,9 @@ pub enum CausalCmd {
 pub enum PatternsCmd {
     List,
     /// Match known patterns in code.
-    Match {
-        code: String,
-        #[arg(long, default_value = "rust")] language: String,
-    },
+    Match { code: String },
     /// Suggest the most relevant pattern.
-    Suggest {
-        task: String,
-        #[arg(long, default_value = "rust")] language: String,
-    },
+    Suggest { task: String },
 }
 
 // ──────── Provenance ────────
@@ -444,7 +430,6 @@ pub enum ConfigCmd {
     AddProfile {
         name: String,
         #[arg(long)] db: Option<String>,
-        #[arg(long)] palace: Option<String>,
     },
 }
 

@@ -1,5 +1,4 @@
 //! Memory decay — implemented as a sleep cycle in the brain-like
-//! cortex. The legacy `nexus-cog-palace::DecayConfig` is replaced
 //! by the [`CortexConfig`] knobs that drive hippocampal eviction
 //! and working-memory decay.
 

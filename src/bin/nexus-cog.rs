@@ -51,12 +51,6 @@ async fn main() -> Result<()> {
             std::fs::create_dir_all(&dir).ok();
             dir.join("palace.db")
         });
-    let palace_id = match cli.palace.clone() {
-        v if !v.is_empty() => v,
-        _ => profile
-            .and_then(|p| p.palace.clone())
-            .unwrap_or_else(|| "default".to_string()),
-    };
     let format = cli.format;
 
     // Commands that don't need a palace open.
@@ -77,11 +71,10 @@ async fn main() -> Result<()> {
         Cmd::Embedder(cmd) => return run_embedder(cmd, format),
         Cmd::Doctor => return run_doctor(),
         // The MCP server is handled asynchronously below.
-        Cmd::Mcp { db, palace, workspace } => {
+        Cmd::Mcp { db, workspace } => {
             let args = McpArgs {
                 db: db.as_ref().map(|p| p.to_string_lossy().into_owned()),
                 workspace: workspace.as_ref().map(|p| p.to_string_lossy().into_owned()),
-                palace: palace.clone().unwrap_or_else(|| "default".into()),
             };
             // Drop any tracing init — rmcp owns the stdio pipe and tracing
             // chatter on stderr can confuse some MCP hosts.
@@ -90,8 +83,7 @@ async fn main() -> Result<()> {
         _ => {}
     }
 
-    let mut ctx = Ctx::open(db, palace_id.clone()).context("open cortex context")?;
-    let _ = &palace_id; // legacy field — kept for backward-compat log lines
+    let mut ctx = Ctx::open(db).context("open cortex context")?;
 
     match cli.cmd {
         Cmd::Config(_) | Cmd::Embedder(_) | Cmd::Completions { .. } | Cmd::Doctor | Cmd::Mcp { .. } => {
@@ -140,30 +132,24 @@ fn run_palace(ctx: &mut Ctx, c: nexus_cog_cli::cli::PalaceCmd, format: OutputFor
 fn run_brain(ctx: &Ctx, c: nexus_cog_cli::cli::BrainCmd, format: OutputFormat) -> Result<()> {
     use nexus_cog_cli::cli::BrainCmd as B;
     let v = match c {
-        B::Verify { code, language } => brain::verify(ctx, &code, Some(&language))?,
-        B::Risks { code, file } => brain::risks(ctx, &code, Some(&file))?,
-        B::Search { query, code, path, language, limit } => {
-            brain::search(
-                ctx,
-                &query,
-                &[(path.clone(), code)],
-                language.as_deref(),
-                limit,
-            )?
+        B::Verify { code } => brain::verify(&code)?,
+        B::Risks { code, file } => brain::risks(&code, Some(&file))?,
+        B::Search { query, code, path, limit } => {
+            brain::search(&query, &[(path.clone(), code)], limit)?
         }
         B::Architecture { code, path } => {
             let corpus = vec![(path.clone(), code)];
-            brain::architecture(ctx, &corpus)?
+            brain::architecture(&corpus)?
         }
         B::Graph { code, path } => {
             let corpus = vec![(path.clone(), code)];
-            brain::graph(ctx, &corpus)?
+            brain::graph(&corpus)?
         }
-        B::Diff { old, new, file } => brain::diff(ctx, &file, &old, &new)?,
-        B::Hypothesis { title, description, code_a, code_b, language } => {
-            brain::hypothesis(ctx, &title, &description, &code_a, &code_b, language.as_deref(), None)?
+        B::Diff { old, new, file } => brain::diff(&file, &old, &new)?,
+        B::Hypothesis { title, description, code_a, code_b } => {
+            brain::hypothesis(&title, &description, &code_a, &code_b, None)?
         }
-        B::File { path } => brain::analyze_file(ctx, &path)?,
+        B::File { path } => brain::analyze_file(&path)?,
     };
     common::print(ctx, render_with(v, format))?;
     Ok(())
@@ -206,8 +192,8 @@ fn run_patterns(ctx: &Ctx, c: nexus_cog_cli::cli::PatternsCmd, format: OutputFor
     use nexus_cog_cli::cli::PatternsCmd as P;
     let v = match c {
         P::List => patterns::list(ctx)?,
-        P::Match { code, language } => patterns::match_code(ctx, &code, Some(&language))?,
-        P::Suggest { task, language } => patterns::suggest(ctx, &task, Some(&language))?,
+        P::Match { code } => patterns::match_code(ctx, &code)?,
+        P::Suggest { task } => patterns::suggest(ctx, &task)?,
     };
     common::print(ctx, render_with(v, format))?;
     Ok(())
@@ -306,8 +292,8 @@ fn run_config(cmd: &nexus_cog_cli::cli::ConfigCmd, _format: OutputFormat) -> Res
     let v = match cmd {
         C::Show => config::show()?,
         C::Init => config::init()?,
-        C::AddProfile { name, db, palace } => {
-            config::add_profile(name, db.as_deref(), palace.as_deref())?
+        C::AddProfile { name, db } => {
+            config::add_profile(name, db.as_deref())?
         }
     };
     print!("{}", serde_json::to_string_pretty(&v)?);

@@ -2,9 +2,8 @@
 //!
 //! Holds the single [`PersistenceBackend`] for the orthogonal
 //! engines (causal graph, provenance, patterns, antifragile) plus
-//! the brain-like [`Cortex`] that replaces the legacy palace /
-//! brain / cognitive / intel / intent engines. Every CLI
-//! subcommand and MCP tool routes through these two.
+//! the brain-like [`Cortex`]. Every CLI subcommand and MCP tool
+//! routes through these two.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -22,9 +21,8 @@ use nexus_cog_patterns::PatternMatcher;
 use nexus_cog_provenance::ProvenanceGraphEngine;
 use nexus_cog_storage::PersistenceBackend;
 
-/// Brain-like cortex — replaces the legacy palace/brain/
-/// cognitive/intel/intent engines. Cloned per workspace so each
-/// agent session has its own cognitive state.
+/// Brain-like cortex. One per workspace so each agent session
+/// has its own cognitive state.
 #[derive(Clone)]
 pub struct CortexHandle {
     inner: Arc<RwLock<Cortex>>,
@@ -107,10 +105,7 @@ pub struct Engines {
     pub intent_storage: IntentStorage,
 }
 
-/// In-memory intent storage. The legacy `nexus-cog-intent`
-/// crate persisted intents to SQLite; we keep that as a
-/// near-term upgrade but for now intents live in memory
-/// because the cortex itself is in-memory.
+/// In-memory intent storage.
 #[derive(Default)]
 pub struct IntentStorage {
     intents: parking_lot::RwLock<Vec<nexus_cog_core::intent::ModuleIntent>>,
@@ -174,7 +169,7 @@ pub struct Ctx {
 }
 
 impl Ctx {
-    pub fn open(db_path: PathBuf, _palace_id: String) -> Result<Self> {
+    pub fn open(db_path: PathBuf) -> Result<Self> {
         let backend = Arc::new(nexus_cog_storage::SqliteBackend::open(&db_path)?);
         let engines = Engines::new(backend.clone())?;
         Ok(Self {

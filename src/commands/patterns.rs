@@ -13,15 +13,13 @@ pub fn list(ctx: &Ctx) -> Result<Value> {
     }))
 }
 
-pub fn match_code(ctx: &Ctx, code: &str, language: Option<&str>) -> Result<Value> {
-    let lang = language.unwrap_or("rust");
-    let matches = ctx.engines.patterns.match_code(code, lang);
+pub fn match_code(ctx: &Ctx, code: &str) -> Result<Value> {
+    let matches = ctx.engines.patterns.match_code(code, "rust");
     Ok(serde_json::to_value(matches)?)
 }
 
-pub fn suggest(ctx: &Ctx, task: &str, language: Option<&str>) -> Result<Value> {
-    let lang = language.unwrap_or("rust");
-    let p = ctx.engines.patterns.suggest_pattern(task, lang);
+pub fn suggest(ctx: &Ctx, task: &str) -> Result<Value> {
+    let p = ctx.engines.patterns.suggest_pattern(task, "rust");
     match p {
         Some(pat) => Ok(serde_json::to_value(pat)?),
         None => Ok(serde_json::json!({

@@ -41,10 +41,6 @@ pub struct McpArgs {
     /// Defaults to the current working directory.
     #[arg(long, env = "NEXUS_COG_WORKSPACE")]
     pub workspace: Option<String>,
-
-    /// Palace namespace id.
-    #[arg(long, env = "NEXUS_COG_PALACE", default_value = "default")]
-    pub palace: String,
 }
 
 pub async fn run(args: McpArgs) -> Result<()> {
@@ -63,7 +59,7 @@ pub async fn run(args: McpArgs) -> Result<()> {
         }
     };
     tracing::info!(?db, ?workspace, "opening per-workspace palace");
-    let ctx = Arc::new(RwLock::new(Ctx::open(db, args.palace)?));
+    let ctx = Arc::new(RwLock::new(Ctx::open(db)?));
     let server = NexusCogMcp::new(ctx).serve(stdio()).await?;
     server.waiting().await?;
     Ok(())
@@ -187,10 +183,7 @@ pub fn all_tools() -> Vec<Tool> {
         "brain_verify",
         "Run the 8-check code verifier.",
         object_schema(
-            &[
-                ("code", "string", "Source code to verify."),
-                ("language", "string", "Optional language hint (e.g. 'rust')."),
-            ],
+            &[("code", "string", "Source code to verify.")],
             &["code"],
         ),
     ));
@@ -207,13 +200,12 @@ pub fn all_tools() -> Vec<Tool> {
     ));
     tools.push(build_tool(
         "brain_search",
-        "Multi-strategy code search (exact + synonym-expanded semantic + structural + behavioral).",
+        "Multi-strategy code search (exact + synonym-expanded).",
         object_schema(
             &[
                 ("query", "string", "Search query."),
                 ("code", "string", "Inline source corpus (single virtual file)."),
                 ("path", "string", "Optional virtual path for the inline corpus."),
-                ("language", "string", "Optional language hint (e.g. 'rust')."),
                 ("limit", "integer", "Maximum results to return (default 20, max 200)."),
             ],
             &["query", "code"],
@@ -251,7 +243,6 @@ pub fn all_tools() -> Vec<Tool> {
                 ("description", "string", "What the hypothesis is about."),
                 ("code_a", "string", "Source code of approach A."),
                 ("code_b", "string", "Source code of approach B."),
-                ("language", "string", "Optional language hint (e.g. 'rust')."),
                 ("criteria", "array", "Optional explicit list of decision criteria to evaluate."),
             ],
             &["title", "description", "code_a", "code_b"],
@@ -360,24 +351,12 @@ pub fn all_tools() -> Vec<Tool> {
     tools.push(build_tool(
         "patterns_match",
         "Match known patterns in code.",
-        object_schema(
-            &[
-                ("code", "string", "Source code."),
-                ("language", "string", "Optional language; defaults to 'rust'."),
-            ],
-            &["code"],
-        ),
+        object_schema(&[("code", "string", "Source code.")], &["code"]),
     ));
     tools.push(build_tool(
         "patterns_suggest",
         "Suggest a pattern for a task.",
-        object_schema(
-            &[
-                ("task", "string", "Task description."),
-                ("language", "string", "Optional language; defaults to 'rust'."),
-            ],
-            &["task"],
-        ),
+        object_schema(&[("task", "string", "Task description.")], &["task"]),
     ));
 
     // ---------- Provenance ----------
@@ -609,12 +588,12 @@ pub async fn dispatch(
         "palace_recall" => { let c = ctx.read().await; commands::palace::recall(&c, &req_str(&args, "query")?, args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize, args.get("min_confidence").and_then(|v| v.as_f64()), args.get("required_tag").and_then(|v| v.as_str()), args.get("room_type").and_then(|v| v.as_str())) }
         "palace_connect" => { let mut c = ctx.write().await; commands::palace::connect(&mut c, &req_str(&args, "from")?, &req_str(&args, "to")?, &req_str(&args, "relation")?, args.get("strength").and_then(|v| v.as_f64())) }
 
-        "brain_verify" => { let c = ctx.read().await; commands::brain::verify(&c, &req_str(&args, "code")?, args.get("language").and_then(|v| v.as_str())) }
-        "brain_risks" => { let c = ctx.read().await; commands::brain::risks(&c, &req_str(&args, "code")?, args.get("file").and_then(|v| v.as_str())) }
-        "brain_search" => { let c = ctx.read().await; commands::brain::search(&c, &req_str(&args, "query")?, &[(args.get("path").and_then(|v| v.as_str()).unwrap_or("<inline>").to_string(), req_str(&args, "code")?)], args.get("language").and_then(|v| v.as_str()), args.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize)) }
-        "brain_architecture" => { let c = ctx.read().await; commands::brain::architecture(&c, &[(args.get("path").and_then(|v| v.as_str()).unwrap_or("<inline>").to_string(), req_str(&args, "code")?)]) }
-        "brain_diff" => { let c = ctx.read().await; commands::brain::diff(&c, &req_str(&args, "file")?, &req_str(&args, "old")?, &req_str(&args, "new")?) }
-        "brain_hypothesis" => { let c = ctx.read().await; let criteria = args.get("criteria").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()); commands::brain::hypothesis(&c, &req_str(&args, "title")?, &req_str(&args, "description")?, &req_str(&args, "code_a")?, &req_str(&args, "code_b")?, args.get("language").and_then(|v| v.as_str()), criteria) }
+        "brain_verify" => { commands::brain::verify(&req_str(&args, "code")?) }
+        "brain_risks" => { commands::brain::risks(&req_str(&args, "code")?, args.get("file").and_then(|v| v.as_str())) }
+        "brain_search" => { commands::brain::search(&req_str(&args, "query")?, &[(args.get("path").and_then(|v| v.as_str()).unwrap_or("<inline>").to_string(), req_str(&args, "code")?)], args.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize)) }
+        "brain_architecture" => { commands::brain::architecture(&[(args.get("path").and_then(|v| v.as_str()).unwrap_or("<inline>").to_string(), req_str(&args, "code")?)]) }
+        "brain_diff" => { commands::brain::diff(&req_str(&args, "file")?, &req_str(&args, "old")?, &req_str(&args, "new")?) }
+        "brain_hypothesis" => { let criteria = args.get("criteria").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()); commands::brain::hypothesis(&req_str(&args, "title")?, &req_str(&args, "description")?, &req_str(&args, "code_a")?, &req_str(&args, "code_b")?, criteria) }
 
         "cognitive_think" => { let mut c = ctx.write().await; commands::cognitive::think(&mut c, &req_str(&args, "task")?, args.get("context").and_then(|v| v.as_str()), args.get("response").and_then(|v| v.as_str())) }
         "cognitive_mirror" => { let c = ctx.read().await; commands::cognitive::mirror(&c, &req_str(&args, "subject")?, &req_str(&args, "response")?) }
@@ -632,8 +611,8 @@ pub async fn dispatch(
         "causal_dump" => { let c = ctx.read().await; commands::causal::dump(&c) }
 
         "patterns_list" => { let c = ctx.read().await; commands::patterns::list(&c) }
-        "patterns_match" => { let c = ctx.read().await; commands::patterns::match_code(&c, &req_str(&args, "code")?, args.get("language").and_then(|v| v.as_str())) }
-        "patterns_suggest" => { let c = ctx.read().await; commands::patterns::suggest(&c, &req_str(&args, "task")?, args.get("language").and_then(|v| v.as_str())) }
+        "patterns_match" => { let c = ctx.read().await; commands::patterns::match_code(&c, &req_str(&args, "code")?) }
+        "patterns_suggest" => { let c = ctx.read().await; commands::patterns::suggest(&c, &req_str(&args, "task")?) }
 
         "provenance_record" => { let mut c = ctx.write().await; commands::provenance::record(&mut c, &req_str(&args, "artifact")?, &req_str(&args, "origin")?, &req_str(&args, "content")?, &req_str(&args, "source")?, &req_str(&args, "prompt")?, args.get("parent").and_then(|v| v.as_str()), args.get("agent").and_then(|v| v.as_str()), args.get("confidence").and_then(|v| v.as_f64())) }
         "provenance_explain" => { let c = ctx.read().await; commands::provenance::explain(&c, &req_str(&args, "id")?, args.get("match_mode").and_then(|v| v.as_str())) }

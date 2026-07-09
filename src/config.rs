@@ -1,8 +1,8 @@
 //! Configuration loading.
 //!
 //! Reads `~/.config/nexus-cog/config.toml` and merges CLI flags.
-//! Supports multiple named profiles (palaces) so you can switch between
-//! projects, agents or namespaces without re-typing flags.
+//! Supports multiple named profiles so you can switch between
+//! projects, agents or workspaces without re-typing flags.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -14,17 +14,15 @@ use serde::{Deserialize, Serialize};
 pub struct CliConfig {
     /// Default profile to use when `--profile` is not given.
     pub default_profile: Option<String>,
-    /// Named palace profiles.
+    /// Named profiles.
     #[serde(default)]
     pub profile: HashMap<String, Profile>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Profile {
-    /// Path to the SQLite palace database.
+    /// Path to the SQLite database (overrides `--workspace`).
     pub db: Option<PathBuf>,
-    /// Palace namespace id inside the DB.
-    pub palace: Option<String>,
     /// Default output format.
     pub format: Option<String>,
     /// Optional embedder URL (e.g. `http://localhost:11434` for ollama).

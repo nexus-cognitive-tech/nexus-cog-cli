@@ -1,6 +1,6 @@
 //! Intel engine subcommands.
 //!
-//! The legacy `nexus-cog-intel` crate (long-term memory +
+//! 
 //! adaptive learner + success predictor) is replaced by the
 //! cortex's hippocampus (episodic memory) and a thin adaptive
 //! learner that records interaction outcomes and ranks
@@ -12,7 +12,6 @@ use serde_json::{json, Value};
 
 use crate::ctx::Ctx;
 
-/// Hippocampal recall — replaces the legacy LTM search.
 pub fn recall(
     ctx: &mut Ctx,
     query: &str,
@@ -21,7 +20,7 @@ pub fn recall(
     min_importance: Option<f64>,
 ) -> Result<Value> {
     let limit = limit.unwrap_or(10).clamp(1, 100);
-    let sdr = encode_text_to_sdr(query);
+    let sdr = crate::commands::common::encode_text_to_sdr(query);
     let hits = ctx.cortex.hippocampus_recall(&sdr, limit, min_importance);
     let json_hits: Vec<Value> = hits
         .into_iter()
@@ -46,7 +45,7 @@ pub fn store(
     category: Option<&str>,
     importance: Option<f64>,
 ) -> Result<Value> {
-    let sdr = encode_text_to_sdr(value);
+    let sdr = crate::commands::common::encode_text_to_sdr(value);
     let label = Some(format!("{}:{}", category.unwrap_or("fact"), key));
     ctx.cortex.working_memory_push(sdr, label);
     Ok(json!({ "key": key, "category": category, "ok": true, "importance": importance }))
@@ -96,7 +95,7 @@ pub fn record_interaction(
     _tools: Vec<String>,
 ) -> Result<Value> {
     let success = success.unwrap_or(true);
-    let sdr = encode_text_to_sdr(task);
+    let sdr = crate::commands::common::encode_text_to_sdr(task);
     let mut inputs = std::collections::HashMap::new();
     inputs.insert("channel.0".to_string(), sdr);
     let _ = ctx.cortex.tick(inputs);
@@ -112,7 +111,7 @@ pub fn suggest_approach(ctx: &Ctx, task: &str, complexity: Option<&str>) -> Resu
     let suggestion = if has_data {
         // Pull the most salient hippocampal episode as the
         // suggestion seed.
-        cortex.hippocampus().recall(&encode_text_to_sdr(task), 1, None).first().map(|h| h.key.clone())
+        cortex.hippocampus().recall(&crate::commands::common::encode_text_to_sdr(task), 1, None).first().map(|h| h.key.clone())
     } else {
         None
     };
@@ -127,22 +126,3 @@ pub fn suggest_approach(ctx: &Ctx, task: &str, complexity: Option<&str>) -> Resu
     }))
 }
 
-pub fn encode_text_to_sdr_pub(text: &str) -> Sdr {
-    encode_text_to_sdr(text)
-}
-
-fn encode_text_to_sdr(text: &str) -> Sdr {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    text.hash(&mut hasher);
-    let h = hasher.finish();
-    let mut bits: Vec<usize> = Vec::new();
-    let mut x = h;
-    for _ in 0..42 {
-        bits.push((x % nexus_cog_neural::SDR_WIDTH as u64) as usize);
-        x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
-    }
-    bits.sort_unstable();
-    bits.dedup();
-    Sdr::from_bits(bits)
-}

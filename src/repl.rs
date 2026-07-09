@@ -60,7 +60,7 @@ pub fn run(ctx: &mut Ctx, fmt: OutputFormat) -> Result<()> {
 fn recall(ctx: &Ctx, fmt: &Fmt, query: &str) {
     use crate::commands::intel;
     let hits = ctx.cortex.hippocampus_recall(
-        &intel::encode_text_to_sdr_pub(query),
+        &crate::commands::common::encode_text_to_sdr(query),
         10,
         None,
     );

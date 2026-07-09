@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use nexus_cog_neural::Sdr;
 use serde_json::Value;
 
 use crate::ctx::Ctx;
@@ -28,6 +29,26 @@ pub fn parse_input(s: &str) -> Result<Value> {
         return Ok(Value::Null);
     }
     serde_json::from_str(s).context("parse JSON input")
+}
+
+/// Deterministic text → SDR encoder used everywhere the CLI needs to
+/// turn user-supplied text into a sparse distributed representation.
+/// Uses the standard library's hasher so it's reproducible without
+/// pulling in another dependency.
+pub fn encode_text_to_sdr(text: &str) -> Sdr {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    let h = hasher.finish();
+    let mut bits: Vec<usize> = Vec::new();
+    let mut x = h;
+    for _ in 0..42 {
+        bits.push((x % nexus_cog_neural::SDR_WIDTH as u64) as usize);
+        x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+    }
+    bits.sort_unstable();
+    bits.dedup();
+    Sdr::from_bits(bits)
 }
 
 /// Read all of stdin into a single Value (array of lines or parsed JSON).

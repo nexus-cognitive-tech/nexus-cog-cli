@@ -17,7 +17,7 @@ use crate::ctx::Ctx;
 /// goal SDR and runs a single tick.
 pub fn think(ctx: &mut Ctx, task: &str, context: Option<&str>, _response: Option<&str>) -> Result<Value> {
     let mut inputs = HashMap::new();
-    let sdr = encode_text_to_sdr(task);
+    let sdr = crate::commands::common::encode_text_to_sdr(task);
     inputs.insert("channel.0".to_string(), sdr);
     let broadcast = ctx.cortex.tick(inputs);
     let context_note = context.unwrap_or("");
@@ -56,7 +56,6 @@ pub fn mirror(ctx: &Ctx, subject: &str, response: &str) -> Result<Value> {
 
 pub fn start_chain(ctx: &mut Ctx) -> Result<Value> {
     // Reset the cortex by replacing it with a fresh one — same
-    // effect as the legacy thought-chain reset.
     *ctx.cortex.write() = nexus_cog_neural::Cortex::new(nexus_cog_neural::CortexConfig::default());
     Ok(json!({ "chain_started": true, "len": ctx.cortex.read().replay().len() }))
 }
@@ -68,7 +67,7 @@ pub fn add_thought(
     confidence: Option<f64>,
 ) -> Result<Value> {
     let _ = (thought_type, confidence);
-    let sdr = encode_text_to_sdr(content);
+    let sdr = crate::commands::common::encode_text_to_sdr(content);
     let mut inputs = HashMap::new();
     inputs.insert("channel.0".to_string(), sdr);
     let _ = ctx.cortex.tick(inputs);
@@ -76,7 +75,7 @@ pub fn add_thought(
 }
 
 pub fn analyze_response(ctx: &Ctx, response: &str) -> Result<Value> {
-    let sdr = encode_text_to_sdr(response);
+    let sdr = crate::commands::common::encode_text_to_sdr(response);
     let mut inputs = HashMap::new();
     inputs.insert("channel.0".to_string(), sdr);
     let broadcast = ctx.cortex.read();
@@ -91,21 +90,6 @@ pub fn analyze_response(ctx: &Ctx, response: &str) -> Result<Value> {
     }))
 }
 
-fn encode_text_to_sdr(text: &str) -> Sdr {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    text.hash(&mut hasher);
-    let h = hasher.finish();
-    let mut bits: Vec<usize> = Vec::new();
-    let mut x = h;
-    for _ in 0..42 {
-        bits.push((x % nexus_cog_neural::SDR_WIDTH as u64) as usize);
-        x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
-    }
-    bits.sort_unstable();
-    bits.dedup();
-    Sdr::from_bits(bits)
-}
 
 #[allow(dead_code)]
 fn _tb_silence(_b: ThoughtBroadcast) {}

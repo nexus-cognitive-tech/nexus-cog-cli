@@ -1,8 +1,7 @@
 //! Intent engine subcommands.
 //!
-//! The legacy `nexus-cog-intent` crate is replaced by the
-//! cortex's amygdala (valence tagging) plus a real security
-//! drift detector running on every `check` call.
+//! Drives the cortex's amygdala (valence tagging) plus a real
+//! security drift detector running on every `check` call.
 
 mod drift_detector;
 
@@ -46,7 +45,7 @@ pub fn check(
     // computes valence too — useful when the caller wants both
     // signals (security findings + emotional tone).
     let mut inputs = std::collections::HashMap::new();
-    let sdr = crate::commands::intel::encode_text_to_sdr_pub(current_code);
+    let sdr = crate::commands::common::encode_text_to_sdr(current_code);
     inputs.insert("channel.0".to_string(), sdr);
     let _ = ctx.cortex.tick(inputs);
 
