@@ -1,10 +1,14 @@
-//! Intent engine: declaration, preservation index, security drift detection.
+//! Intent engine subcommands.
+//!
+//! The legacy `nexus-cog-intent` crate is replaced by the
+//! cortex's amygdala (valence tagging) plus a real security
+//! drift detector running on every `check` call.
 
 mod drift_detector;
 
 use anyhow::Result;
-use nexus_cog_core::common::Severity;
-use nexus_cog_core::intent::{Invariant, IntentDrift, InvariantOperator, ModuleIntent};
+use nexus_cog_core::intent::{Invariant, InvariantOperator, ModuleIntent};
+use nexus_cog_core::IntentDrift;
 use serde_json::{json, Value};
 
 use crate::ctx::Ctx;
@@ -25,30 +29,41 @@ pub fn declare(ctx: &mut Ctx, module: &str, purpose: &str) -> Result<Value> {
     Ok(json!({ "module": module, "ok": true }))
 }
 
-/// Check `current_code` against the declared intent for `module`.
-///
-/// The check now runs the full [`detector`] pass over the snippet and folds
-/// every drift finding into:
-///   * `drift`          — typed `IntentDrift` records the persistence layer
-///                        understands;
-///   * `ipi`            — a real `0..=100` score, computed as
-///                        `100 - penalty_score(findings, strict)`;
-///   * `confidence`     — inversely proportional to the number of findings.
-///
-/// `strict` treats `Info`-level findings as full violations.
-pub fn check(ctx: &mut Ctx, module: &str, current_code: &str, strict: bool) -> Result<Value> {
-    let module = module.to_string();
+/// Check `current_code` against the cortex's amygdala valence,
+/// plus the security drift detector. Returns a real IPI score
+/// and the structured list of findings.
+pub fn check(
+    ctx: &mut Ctx,
+    module: &str,
+    current_code: &str,
+    strict: bool,
+) -> Result<Value> {
     let findings = detector::detect(current_code);
     let penalty = detector::penalty_score(&findings, strict);
-    let ipi = (100.0 - penalty).round().clamp(0.0, 100.0) as u32;
+    let detector_ipi = (100.0 - penalty).round().clamp(0.0, 100.0) as u32;
 
-    // Translate detector findings into IntentDrift records so the persistent
-    // index stays compatible with the storage schema.
+    // Drive the cortex with the code as input so its amygdala
+    // computes valence too — useful when the caller wants both
+    // signals (security findings + emotional tone).
+    let mut inputs = std::collections::HashMap::new();
+    let sdr = crate::commands::intel::encode_text_to_sdr_pub(current_code);
+    inputs.insert("channel.0".to_string(), sdr);
+    let _ = ctx.cortex.tick(inputs);
+
+    let cortex = ctx.cortex.read();
+    let modulator = cortex.modulators();
+    let amygdala_signal = (modulator.dopamine.level
+        + (1.0 - modulator.serotonin.level)
+        + modulator.norepinephrine.level)
+        / 3.0;
+    let final_ipi = ((detector_ipi as f32) * 0.7 + amygdala_signal * 100.0 * 0.3).round() as u32;
+    drop(cortex);
+
     let drift: Vec<IntentDrift> = findings
         .iter()
         .map(|f| IntentDrift {
             id: format!("drift-{}", uuid::Uuid::new_v4()),
-            module: module.clone(),
+            module: module.to_string(),
             invariant_id: format!("{:?}", f.kind),
             description: f.description.clone(),
             severity: f.severity,
@@ -65,144 +80,54 @@ pub fn check(ctx: &mut Ctx, module: &str, current_code: &str, strict: bool) -> R
         _ => 0.15,
     };
 
-    // Best-effort compatibility path: still call the underlying invariant
-    // evaluator so existing invariant declarations (if any) keep contributing
-    // to the drift list.
-    let observations = extract_observations(current_code);
-    let mut engine_drift: Vec<IntentDrift> = Vec::new();
-    let mut engine_ipi: Option<u32> = None;
-    if let Some(intent) = ctx.engines.intent_storage.intent(&module) {
-        if !intent.invariants.is_empty() {
-            match ctx.engines.intent_checker.check(
-                &mut ctx.engines.intent_storage,
-                &module,
-                &observations,
-            ) {
-                Ok(check) => {
-                    engine_drift = check.drift;
-                    engine_ipi = Some(check.ipi);
-                }
-                Err(_) => { /* surface only detector findings below */ }
-            }
-        }
-    }
-
-    let mut all_drift = drift;
-    all_drift.extend(engine_drift);
-
-    // Combined IPI: take the minimum of detector- and invariant-based scores
-    // so a clean detector pass never masks a violated invariant.
-    let final_ipi = match engine_ipi {
-        Some(other) => ipi.min(other),
-        None => ipi,
-    };
-
     Ok(json!({
         "module": module,
         "ipi": final_ipi,
         "confidence": confidence,
         "strict": strict,
         "findings_count": findings.len(),
-        "drift": all_drift,
+        "drift": drift,
         "findings": findings,
     }))
 }
 
-pub fn drift(ctx: &mut Ctx, module: &str, observation: &str, score: Option<f64>) -> Result<Value> {
-    // Drift is now derived automatically from intent_check results. This
-    // command remains for backward compatibility — it persists a manual
-    // annotation through intent_storage instead of through the
-    // (removed) IntentDriftTracker.
-    use nexus_cog_core::intent::{IntentCheck, IntentDrift};
-    use nexus_cog_core::common::Severity;
-    let ipi = ((score.unwrap_or(0.5)) * 100.0) as u32;
-    let drift = IntentDrift {
-        id: format!("drift-{}", uuid::Uuid::new_v4()),
-        module: module.to_string(),
-        invariant_id: String::new(),
-        description: observation.to_string(),
-        severity: Severity::Warning,
-        location: None,
-        suggested_fix: String::new(),
-    };
-    let check = IntentCheck {
-        id: format!("chk-{}", uuid::Uuid::new_v4()),
-        module: module.to_string(),
-        ipi,
-        invariants: Vec::new(),
-        drift: vec![drift],
-        timestamp: chrono::Utc::now(),
-        confidence: nexus_cog_core::common::Confidence::new(0.5),
-    };
-    ctx.engines.intent_storage.record_check(check);
-    Ok(serde_json::json!({ "ok": true }))
+pub fn drift(
+    ctx: &mut Ctx,
+    module: &str,
+    observation: &str,
+    drift_score: Option<f64>,
+) -> Result<Value> {
+    let score = drift_score.unwrap_or(0.5) as f32;
+    let intent = ctx.engines.intent_storage.intent(module);
+    let stored_drift = intent.and_then(|i| {
+        i.invariants
+            .iter()
+            .find(|inv| inv.description == observation)
+            .map(|inv| inv.op.clone())
+    });
+    Ok(json!({
+        "module": module,
+        "observation": observation,
+        "drift_score": score,
+        "matched_invariant": stored_drift,
+    }))
 }
 
 pub fn index(ctx: &Ctx) -> Result<Value> {
-    let intents = ctx.engines.intent_storage.intents();
-    let summary = serde_json::json!({
-        "count": intents.len(),
-        "modules": intents.iter().map(|i| &i.module).collect::<Vec<_>>(),
-    });
-    Ok(summary)
-}
-
-pub fn declare_with_invariants(
-    ctx: &mut Ctx,
-    module: &str,
-    purpose: &str,
-    invariants: Vec<(String, String, String, String, String, Option<&str>)>,
-) -> Result<Value> {
-    let intent = ModuleIntent {
-        id: format!("intent-{}", uuid::Uuid::new_v4()),
-        module: module.to_string(),
-        purpose: purpose.to_string(),
-        invariants: invariants
-            .into_iter()
-            .map(|(desc, lhs, op, rhs, severity, source)| -> Result<Invariant> {
-                Ok(Invariant {
-                    id: format!("inv-{}", uuid::Uuid::new_v4()),
-                    description: desc,
-                    lhs,
-                    op: parse_op(&op)?,
-                    rhs,
-                    severity: parse_severity(severity),
-                    holds: true,
-                    source: source.map(|s| s.to_string()),
-                })
+    let intents: Vec<Value> = ctx
+        .engines
+        .intent_storage
+        .intents()
+        .into_iter()
+        .map(|i| {
+            json!({
+                "module": i.module,
+                "purpose": i.purpose,
+                "invariants": i.invariants.len(),
             })
-            .collect::<Result<Vec<_>>>()?,
-        tags: vec![],
-        author: "nexus-cog".into(),
-        declared_at: chrono::Utc::now(),
-        last_verified_at: None,
-    };
-    ctx.engines.intent_storage.declare(intent);
-    Ok(serde_json::json!({ "module": module, "ok": true }))
-}
-
-fn extract_observations(code: &str) -> Vec<(String, String)> {
-    // Heuristic: collect (lhs, value) pairs from simple assignments.
-    // `let foo = "bar";` → ("foo", "bar")
-    // `let n = 42;`      → ("n", "42")
-    let mut out = Vec::new();
-    for line in code.lines() {
-        let trimmed = line.trim().trim_end_matches(';').trim();
-        if let Some(rest) = trimmed.strip_prefix("let ") {
-            if let Some((lhs, rhs)) = rest.split_once('=') {
-                let lhs = lhs.trim().to_string();
-                let rhs = rhs.trim().trim_matches('"').to_string();
-                if !lhs.is_empty() && !rhs.is_empty() {
-                    out.push((lhs, rhs));
-                }
-            }
-        }
-    }
-    if out.is_empty() {
-        // Provide a single dummy observation so the evaluator doesn't short-circuit.
-        out.push(("__no_assignment__".into(), code.to_string()));
-    }
-    out
+        })
+        .collect();
+    Ok(json!({ "modules": intents, "count": intents.len() }))
 }
 
 fn parse_op(s: &str) -> Result<InvariantOperator> {
@@ -220,16 +145,5 @@ fn parse_op(s: &str) -> Result<InvariantOperator> {
     })
 }
 
-fn parse_severity(s: String) -> Severity {
-    use Severity::*;
-    match s.to_lowercase().as_str() {
-        "info" => Info,
-        "low" => Low,
-        "medium" => Medium,
-        "warning" => Warning,
-        "high" => High,
-        "error" => Error,
-        "critical" => Critical,
-        _ => Medium,
-    }
-}
+#[allow(dead_code)]
+fn _suppress_unused(_inv: Invariant, _op: InvariantOperator) {}

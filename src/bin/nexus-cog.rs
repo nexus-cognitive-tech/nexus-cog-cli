@@ -90,7 +90,8 @@ async fn main() -> Result<()> {
         _ => {}
     }
 
-    let mut ctx = Ctx::open(db, palace_id.clone()).context("open palace")?;
+    let mut ctx = Ctx::open(db, palace_id.clone()).context("open cortex context")?;
+    let _ = &palace_id; // legacy field — kept for backward-compat log lines
 
     match cli.cmd {
         Cmd::Config(_) | Cmd::Embedder(_) | Cmd::Completions { .. } | Cmd::Doctor | Cmd::Mcp { .. } => {
@@ -107,7 +108,8 @@ async fn main() -> Result<()> {
         Cmd::Antifragile(c) => run_antifragile(&ctx, c, format),
         Cmd::Backup(c) => run_backup(&ctx, c, format),
         Cmd::Decay => {
-            let r = decay::apply(&ctx, &decay::default_config())?;
+            let (half_life_days, min_importance, replay_per_cycle) = decay::default_config();
+            let r = decay::apply(&ctx, half_life_days, min_importance, replay_per_cycle)?;
             common::print(&ctx, decay::report_to_value(&r))?;
             ctx.save()?;
             Ok(())

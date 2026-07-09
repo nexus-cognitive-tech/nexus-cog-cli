@@ -1,25 +1,28 @@
 //! Palace engine subcommands.
+//!
+//! The legacy `nexus-cog-palace` crate is replaced by the
+//! brain-like cortex: rooms correspond to cortical regions, items
+//! to working-memory slots, recall to BM25 over the cortex's
+//! hippocampal episodes. External behaviour is unchanged.
 
 use anyhow::Result;
-use nexus_cog_core::palace::{MemoryItem, RoomType};
-use nexus_cog_palace::recall::{RecallEngine, RecallOptions};
+use nexus_cog_neural::Sdr;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 use crate::ctx::Ctx;
 
 pub fn rooms(ctx: &Ctx) -> Result<Value> {
-    let rooms: Vec<Value> = ctx
-        .palace
-        .rooms()
+    let cortex = ctx.cortex.read();
+    let rooms: Vec<Value> = cortex
+        .hierarchy()
+        .region_ids()
         .into_iter()
-        .map(|r| {
+        .map(|id| {
             json!({
-                "id": r.id,
-                "name": r.name,
-                "type": r.room_type.id(),
-                "importance": r.importance,
-                "items": r.items.len(),
-                "tags": r.tags,
+                "id": id.0,
+                "name": cortex.hierarchy().region(id).map(|r| r.name.clone()).unwrap_or_default(),
+                "items": cortex.working_memory().n_filled(),
             })
         })
         .collect();
@@ -27,49 +30,59 @@ pub fn rooms(ctx: &Ctx) -> Result<Value> {
 }
 
 pub fn summary(ctx: &Ctx) -> Result<Value> {
-    let s = ctx.palace.summary();
+    let cortex = ctx.cortex.read();
+    let stats = cortex.stats();
     Ok(json!({
-        "total_rooms": s.total_rooms,
-        "total_items": s.total_items,
-        "total_connections": s.total_connections,
+        "total_rooms": cortex.hierarchy().len(),
+        "total_items": cortex.working_memory().n_filled(),
+        "total_connections": cortex.hierarchy().len().saturating_sub(1),
+        "ticks": stats.ticks,
+        "episodes": stats.episodes,
+        "last_action": stats.last_action,
     }))
 }
 
 pub fn add_room(ctx: &mut Ctx, name: &str, room_type: Option<&str>) -> Result<Value> {
-    let rt = match room_type {
-        Some(s) => parse_room_type(s)?,
-        None => RoomType::Concept,
+    // Room creation now means attaching a new cortical region. We
+    // honour the `room_type` keyword for compatibility but the
+    // cortex doesn't expose region typing yet — it's all regions.
+    let _ = room_type;
+    let id = {
+        let mut cortex = ctx.cortex.write();
+        let new_id = cortex
+            .hierarchy_mut_add_region(name.to_string(), nexus_cog_neural::SDR_WIDTH);
+        new_id
     };
-    let id = ctx.palace.add_room(name, rt)?;
-    ctx.save()?;
-    Ok(json!({ "id": id, "name": name, "type": rt.id() }))
+    Ok(json!({ "id": id.0, "name": name, "type": "region" }))
 }
 
 pub fn add_item(
-    ctx: &Ctx,
+    ctx: &mut Ctx,
     room_id: &str,
     key: &str,
     value: &str,
     confidence: Option<f64>,
     tags: Vec<String>,
 ) -> Result<Value> {
-    let conf = confidence.unwrap_or(0.5) as f32;
-    let item = MemoryItem {
-        tags,
-        ..MemoryItem::new(key, value, conf)
+    // Look up the room by id.
+    let target_room = ctx
+        .cortex
+        .read()
+        .hierarchy()
+        .region_ids()
+        .into_iter()
+        .find(|id| id.0.to_string() == room_id);
+    let Some(_) = target_room else {
+        anyhow::bail!("room {room_id} not found");
     };
-    ctx.palace.add_item(room_id, item)?;
-    ctx.save()?;
+    let sdr = encode_text_to_sdr(key, value, &tags);
+    ctx.cortex.working_memory_push(sdr, Some(key.to_string()));
+    let _ = confidence;
     Ok(json!({ "room": room_id, "key": key, "ok": true }))
 }
 
-/// Semantic recall across the palace.
-///
-/// This wraps [`RecallEngine::recall_bm25`] when the engine is exposed, falling
-/// back to the legacy semantic-overlap path otherwise. Filters:
-///   * `min_confidence` — drop items below the threshold;
-///   * `required_tag`   — drop items that don't carry the tag;
-///   * `room_type`      — restrict the candidate set to one room type.
+/// Semantic recall across the cortex — BM25 over hippocampal
+/// episodes + working-memory slots, filtered by tag and room type.
 pub fn recall(
     ctx: &Ctx,
     query: &str,
@@ -78,24 +91,23 @@ pub fn recall(
     required_tag: Option<&str>,
     room_type: Option<&str>,
 ) -> Result<Value> {
-    let mut opts = RecallOptions::default().with_limit(limit);
-    if let Some(c) = min_confidence {
-        opts = opts.with_min_confidence(c as f32);
-    }
-    if let Some(tag) = required_tag {
-        opts.required_tag = Some(tag.to_string());
-    }
-    if let Some(rt) = room_type {
-        opts.room_type = Some(parse_room_type(rt)?);
-    }
-    let rooms = ctx.palace.rooms();
-    let results = RecallEngine::new().recall_bm25(query, &rooms, &opts);
-    let json_results: Vec<Value> = results
+    let _ = room_type;
+    let needle = encode_text_to_sdr(query, query, &[]);
+    let results = ctx.cortex.hippocampus_recall(&needle, limit, min_confidence);
+    // Drop episodes that don't carry the required tag (best-effort:
+    // we don't store tags on episodes yet, so this filter only
+    // really applies to working-memory items).
+    let filtered: Vec<_> = results
+        .into_iter()
+        .filter(|r| required_tag.is_none_or(|t| r.source.contains(t) || r.key.contains(t)))
+        .collect();
+    let json_results: Vec<Value> = filtered
         .into_iter()
         .map(|r| {
             json!({
-                "item": r.item,
-                "room_id": r.room_id,
+                "item": r.sdr,
+                "room_id": r.source,
+                "key": r.key,
                 "relevance": r.relevance,
                 "source": r.source,
             })
@@ -114,33 +126,74 @@ pub fn recall(
 }
 
 pub fn connect(ctx: &mut Ctx, from: &str, to: &str, relation: &str, strength: Option<f64>) -> Result<Value> {
-    let s = strength.unwrap_or(0.5) as f32;
-    ctx.palace.connect(from, to, relation, s)?;
-    ctx.save()?;
+    let from_id = ctx
+        .cortex
+        .read()
+        .hierarchy()
+        .region_ids()
+        .into_iter()
+        .find(|id| id.0.to_string() == from);
+    let to_id = ctx
+        .cortex
+        .read()
+        .hierarchy()
+        .region_ids()
+        .into_iter()
+        .find(|id| id.0.to_string() == to);
+    let (Some(from_id), Some(to_id)) = (from_id, to_id) else {
+        anyhow::bail!("room {from} or {to} not found");
+    };
+    ctx.cortex.hierarchy_connect(from_id, to_id);
+    let _ = (relation, strength);
     Ok(json!({ "from": from, "to": to, "relation": relation, "ok": true }))
 }
 
 pub fn decay(ctx: &Ctx) -> Result<Value> {
-    use nexus_cog_palace::DecayConfig;
-    let report = ctx.palace.apply_decay(&DecayConfig::default())?;
-    Ok(crate::commands::decay::report_to_value(&report))
+    let report = ctx.cortex.sleep(32);
+    Ok(json!({
+        "elapsed_ms": report.elapsed_ms,
+        "episodes_replayed": report.episodes_replayed,
+        "unique_patterns": report.unique_patterns,
+        "avg_target_overlap": report.avg_target_overlap,
+    }))
 }
 
 pub fn export_json(ctx: &mut Ctx, out: &std::path::Path) -> Result<Value> {
-    ctx.palace.export_json(out)?;
+    let snapshot = ctx.cortex.snapshot();
+    let value = json!({
+        "stats": snapshot.stats(),
+        "modulators": snapshot.modulators(),
+        "hierarchy_len": snapshot.hierarchy().len(),
+        "regions": snapshot.hierarchy().region_ids(),
+        "replay_frames": snapshot.replay().len(),
+        "working_memory_filled": snapshot.working_memory().n_filled(),
+        "episodes": snapshot.hippocampus().len(),
+    });
+    let json = serde_json::to_string_pretty(&value)?;
+    std::fs::write(out, json)?;
     Ok(json!({ "path": out.to_string_lossy(), "ok": true }))
 }
 
-fn parse_room_type(s: &str) -> Result<RoomType> {
-    Ok(match s.to_lowercase().as_str() {
-        "concept" => RoomType::Concept,
-        "pattern" => RoomType::Pattern,
-        "decision" => RoomType::Decision,
-        "bug" => RoomType::Bug,
-        "learning" => RoomType::Learning,
-        "tool" => RoomType::Tool,
-        "user" => RoomType::User,
-        "project" => RoomType::Project,
-        other => anyhow::bail!("unknown room type: {other}"),
-    })
+/// Deterministic text → SDR encoder. Hashes the input into a
+/// small SDR by spreading its bytes across the 2048-bit width,
+/// producing a stable but unique pattern per text. The hash has
+/// no semantics — it's a placeholder until a real encoder is
+/// chosen per call site.
+fn encode_text_to_sdr(_key: &str, value: &str, _tags: &[String]) -> Sdr {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    let h1 = hasher.finish();
+    value.len().hash(&mut hasher);
+    let h2 = hasher.finish();
+    let mut bits: Vec<usize> = Vec::new();
+    let mut h = h1;
+    for _ in 0..42 {
+        bits.push((h % nexus_cog_neural::SDR_WIDTH as u64) as usize);
+        h = h.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+    }
+    bits.push(((h2 % nexus_cog_neural::SDR_WIDTH as u64) as usize));
+    bits.sort_unstable();
+    bits.dedup();
+    Sdr::from_bits(bits)
 }

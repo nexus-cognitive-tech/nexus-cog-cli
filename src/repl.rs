@@ -1,8 +1,8 @@
 //! Interactive REPL.
 //!
-//! `nexus-cog repl` opens a shell where every line is treated as a search
-//! query against the active palace. History is persisted to
-//! `~/.local/share/nexus-cog/repl_history` (best-effort).
+//! `nexus-cog repl` opens a shell where every line is treated as a
+//! hippocampal recall query against the active cortex. History is
+//! persisted to `~/.local/share/nexus-cog/repl_history` (best-effort).
 
 use anyhow::Result;
 use rustyline::history::FileHistory;
@@ -22,10 +22,7 @@ pub fn run(ctx: &mut Ctx, fmt: OutputFormat) -> Result<()> {
     }
 
     let f = Fmt::new(fmt);
-    println!(
-        "nexus-cog REPL — type a query to recall from `{}`. Ctrl-D to exit.",
-        ctx.palace_id
-    );
+    println!("nexus-cog REPL — type a query to recall from the cortex. Ctrl-D to exit.");
     loop {
         let readline = rl.readline("nexus-cog> ");
         match readline {
@@ -38,7 +35,7 @@ pub fn run(ctx: &mut Ctx, fmt: OutputFormat) -> Result<()> {
                     break;
                 }
                 if line == ":help" || line == ":h" {
-                    println!("commands: :help :quit | otherwise: search query");
+                    println!("commands: :help :quit | otherwise: recall query");
                     continue;
                 }
                 let _ = rl.add_history_entry(line);
@@ -61,11 +58,13 @@ pub fn run(ctx: &mut Ctx, fmt: OutputFormat) -> Result<()> {
 }
 
 fn recall(ctx: &Ctx, fmt: &Fmt, query: &str) {
-    use nexus_cog_palace::RecallOptions;
-    let opts = RecallOptions::default().with_limit(10);
-    let results = ctx.palace.recall_semantic(query, opts);
-    let value = serde_json::to_value(&results).unwrap_or(serde_json::Value::Null);
+    use crate::commands::intel;
+    let hits = ctx.cortex.hippocampus_recall(
+        &intel::encode_text_to_sdr_pub(query),
+        10,
+        None,
+    );
+    let value = serde_json::to_value(&hits).unwrap_or(serde_json::Value::Null);
     let mut out = std::io::stdout();
     let _ = fmt.render(&value, &mut out);
 }
-

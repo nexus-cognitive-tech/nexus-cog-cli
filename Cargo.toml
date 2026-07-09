@@ -16,14 +16,10 @@ readme = "README.md"
 nexus-cog-core = { path = "../nexus-cog-core", version = "0.1.0" }
 nexus-cog-storage = { path = "../nexus-cog-storage", version = "0.1.0" }
 nexus-cog-embeddings = { path = "../nexus-cog-embeddings", version = "0.1.0" }
-nexus-cog-palace = { path = "../nexus-cog-palace", version = "0.1.0" }
-nexus-cog-brain = { path = "../nexus-cog-brain", version = "0.1.0" }
-nexus-cog-cognitive = { path = "../nexus-cog-cognitive", version = "0.1.0" }
+nexus-cog-neural = { path = "../nexus-cog-neural", version = "0.1.0" }
 nexus-cog-causal = { path = "../nexus-cog-causal", version = "0.2.0" }
 nexus-cog-patterns = { path = "../nexus-cog-patterns", version = "0.1.0" }
 nexus-cog-provenance = { path = "../nexus-cog-provenance", version = "0.2.0" }
-nexus-cog-intel = { path = "../nexus-cog-intel", version = "0.1.0" }
-nexus-cog-intent = { path = "../nexus-cog-intent", version = "0.2.0" }
 nexus-cog-antifragile = { path = "../nexus-cog-antifragile", version = "0.1.0" }
 
 # ─── Dev-cycle overrides ───────────────────────────────────────────────────

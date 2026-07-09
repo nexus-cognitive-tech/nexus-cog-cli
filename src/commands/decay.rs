@@ -1,23 +1,30 @@
-//! Memory decay.
+//! Memory decay — implemented as a sleep cycle in the brain-like
+//! cortex. The legacy `nexus-cog-palace::DecayConfig` is replaced
+//! by the [`CortexConfig`] knobs that drive hippocampal eviction
+//! and working-memory decay.
 
 use anyhow::Result;
-use nexus_cog_palace::{DecayConfig, DecayReport};
-use serde_json::Value;
+use nexus_cog_neural::ConsolidationReport;
+use serde_json::{json, Value};
 
 use crate::ctx::Ctx;
 
-pub fn apply(ctx: &Ctx, config: &DecayConfig) -> Result<DecayReport> {
-    Ok(ctx.palace.apply_decay(config)?)
+/// Run one consolidation cycle.
+pub fn apply(ctx: &Ctx, _half_life_days: f32, min_importance: f32, replay_per_cycle: usize) -> Result<ConsolidationReport> {
+    let report = ctx.cortex.sleep(replay_per_cycle);
+    let _ = min_importance;
+    Ok(report)
 }
 
-pub fn default_config() -> DecayConfig {
-    DecayConfig::default()
+pub fn default_config() -> (f32, f32, usize) {
+    (14.0, 0.05, 32)
 }
 
-pub fn report_to_value(r: &DecayReport) -> Value {
-    serde_json::json!({
-        "items_pruned_by_importance": r.items_pruned_by_importance,
-        "items_pruned_by_ttl": r.items_pruned_by_ttl,
-        "rooms_pruned": r.rooms_pruned,
+pub fn report_to_value(r: &ConsolidationReport) -> Value {
+    json!({
+        "episodes_replayed": r.episodes_replayed,
+        "unique_patterns": r.unique_patterns,
+        "avg_target_overlap": r.avg_target_overlap,
+        "elapsed_ms": r.elapsed_ms,
     })
 }

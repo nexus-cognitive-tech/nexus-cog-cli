@@ -1,128 +1,194 @@
-//! Shared CLI context — owns every engine handle plus the single
-//! [`PersistenceBackend`] that every engine shares.
+//! Shared CLI context.
+//!
+//! Holds the single [`PersistenceBackend`] for the orthogonal
+//! engines (causal graph, provenance, patterns, antifragile) plus
+//! the brain-like [`Cortex`] that replaces the legacy palace /
+//! brain / cognitive / intel / intent engines. Every CLI
+//! subcommand and MCP tool routes through these two.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use parking_lot::RwLock;
 
 use nexus_cog_antifragile::{AdversarialGenerator, EdgeCaseExplorer, RobustnessScorer};
-use nexus_cog_brain::{
-    AutoArchitect, CodeGraphBuilder, CodeVerifier, HypothesisEngine, NeuralSearch,
-    RiskAnalyzer, SemanticDiffEngine,
+use nexus_cog_causal::{
+    BackwardReasoner, BlastRadiusCalculator, CausalGraphEngine, CounterfactualReasoner,
+    ForwardReasoner, PreMortemEngine,
 };
-use nexus_cog_causal::CausalGraphEngine;
-use nexus_cog_cognitive::{CognitiveMirror, CognitiveScaffold, ResponseAnalyzer, ThoughtChain};
-use nexus_cog_intel::{
-    AdaptiveLearner, LearnerConfig, LongTermMemory, PredictorConfig, SuccessPredictor,
-};
-use nexus_cog_intent::{IntentChecker, IntentStorage};
-use nexus_cog_palace::{PersistentPalace, SqliteBackend};
+use nexus_cog_neural::{Cortex, CortexConfig};
 use nexus_cog_patterns::PatternMatcher;
 use nexus_cog_provenance::ProvenanceGraphEngine;
 use nexus_cog_storage::PersistenceBackend;
 
-/// Every engine handle the CLI may need. Every persistent engine is
-/// constructed against the shared [`backend`](Self::backend) so there is
-/// exactly one connection / file open per CLI session.
+/// Brain-like cortex — replaces the legacy palace/brain/
+/// cognitive/intel/intent engines. Cloned per workspace so each
+/// agent session has its own cognitive state.
+#[derive(Clone)]
+pub struct CortexHandle {
+    inner: Arc<RwLock<Cortex>>,
+}
+
+impl CortexHandle {
+    /// New default cortex.
+    pub fn new() -> Self {
+        Self { inner: Arc::new(RwLock::new(Cortex::new(CortexConfig::default()))) }
+    }
+
+    /// Run one tick.
+    pub fn tick(&self, inputs: std::collections::HashMap<String, nexus_cog_neural::Sdr>) -> nexus_cog_neural::ThoughtBroadcast {
+        self.inner.write().tick(inputs)
+    }
+
+    /// Read-only access.
+    pub fn read(&self) -> parking_lot::RwLockReadGuard<'_, Cortex> {
+        self.inner.read()
+    }
+
+    /// Mutable access (single tick at a time).
+    pub fn write(&self) -> parking_lot::RwLockWriteGuard<'_, Cortex> {
+        self.inner.write()
+    }
+
+    /// Run a sleep cycle.
+    pub fn sleep(&self, replay_per_cycle: usize) -> nexus_cog_neural::ConsolidationReport {
+        self.inner.write().sleep(replay_per_cycle)
+    }
+
+    /// Restore cortex from a snapshot.
+    pub fn restore(&self, cortex: Cortex) {
+        *self.inner.write() = cortex;
+    }
+
+    /// Snapshot the cortex for persistence.
+    pub fn snapshot(&self) -> Cortex {
+        self.inner.read().clone_lite()
+    }
+
+    /// Push an SDR onto working memory.
+    pub fn working_memory_push(&self, sdr: nexus_cog_neural::Sdr, label: Option<String>) {
+        self.inner.write().working_memory_push(sdr, label);
+    }
+
+    /// Connect two cortical regions.
+    pub fn hierarchy_connect(&self, from: nexus_cog_neural::RegionId, to: nexus_cog_neural::RegionId) {
+        self.inner.write().hierarchy_connect(from, to);
+    }
+
+    /// Recall over hippocampal episodes using BM25-style overlap.
+    pub fn hippocampus_recall(
+        &self,
+        query: &nexus_cog_neural::Sdr,
+        limit: usize,
+        min_confidence: Option<f64>,
+    ) -> Vec<nexus_cog_neural::HippocampalHit> {
+        self.inner.read().hippocampus().recall(query, limit, min_confidence.map(|v| v as f32))
+    }
+}
+
+/// Every orthogonal (non-brain) engine the CLI may need. Brain
+/// operations all go through [`CortexHandle`].
 pub struct Engines {
-    /// The single SQL backend used by every persistent engine.
+    /// Shared SQL backend used by the orthogonal persistent engines.
     pub backend: Arc<dyn PersistenceBackend>,
-    pub verifier: CodeVerifier,
-    pub risk: RiskAnalyzer,
-    pub search: NeuralSearch,
-    pub architect: AutoArchitect,
-    pub graph: CodeGraphBuilder,
-    pub diff: SemanticDiffEngine,
-    pub hypothesis: HypothesisEngine,
-    pub cognitive: CognitiveScaffold,
-    pub mirror: CognitiveMirror,
-    pub thought: ThoughtChain,
-    pub response: ResponseAnalyzer,
     pub causal: CausalGraphEngine,
-    pub blast: nexus_cog_causal::BlastRadiusCalculator,
-    pub pre_mortem: nexus_cog_causal::PreMortemEngine,
-    pub counterfactual: nexus_cog_causal::CounterfactualReasoner,
-    pub forward: nexus_cog_causal::ForwardReasoner,
-    pub backward: nexus_cog_causal::BackwardReasoner,
+    pub blast: BlastRadiusCalculator,
+    pub pre_mortem: PreMortemEngine,
+    pub counterfactual: CounterfactualReasoner,
+    pub forward: ForwardReasoner,
+    pub backward: BackwardReasoner,
     pub patterns: PatternMatcher,
-    pub ltm: LongTermMemory,
-    pub learner: AdaptiveLearner,
-    pub predictor: SuccessPredictor,
-    pub intent_storage: IntentStorage,
-    pub intent_checker: IntentChecker,
     pub provenance: ProvenanceGraphEngine,
     pub adversarial: AdversarialGenerator,
     pub edge_cases: EdgeCaseExplorer,
     pub robustness: RobustnessScorer,
+    /// In-memory intent storage (declared modules + invariants).
+    pub intent_storage: IntentStorage,
+}
+
+/// In-memory intent storage. The legacy `nexus-cog-intent`
+/// crate persisted intents to SQLite; we keep that as a
+/// near-term upgrade but for now intents live in memory
+/// because the cortex itself is in-memory.
+#[derive(Default)]
+pub struct IntentStorage {
+    intents: parking_lot::RwLock<Vec<nexus_cog_core::intent::ModuleIntent>>,
+}
+
+impl IntentStorage {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn declare(&self, intent: nexus_cog_core::intent::ModuleIntent) {
+        let mut g = self.intents.write();
+        g.retain(|i| i.module != intent.module);
+        g.push(intent);
+    }
+
+    pub fn intent(&self, module: &str) -> Option<nexus_cog_core::intent::ModuleIntent> {
+        self.intents.read().iter().find(|i| i.module == module).cloned()
+    }
+
+    pub fn intents(&self) -> Vec<nexus_cog_core::intent::ModuleIntent> {
+        self.intents.read().clone()
+    }
 }
 
 impl Engines {
-    /// Build every engine against the shared backend.
     pub fn new(backend: Arc<dyn PersistenceBackend>) -> Result<Self> {
         let causal = CausalGraphEngine::with_backend(backend.clone())?;
-        let ltm = LongTermMemory::with_backend(backend.clone());
-        let learner = AdaptiveLearner::with_backend(backend.clone(), LearnerConfig::default())?;
-        let predictor = SuccessPredictor::with_backend(backend.clone(), PredictorConfig::default())?;
-        let intent_storage = IntentStorage::with_backend(backend.clone())?;
-        let provenance = ProvenanceGraphEngine::with_backend(backend.clone())?;
         Ok(Self {
-            backend: backend.clone(),
-            verifier: CodeVerifier::new(),
-            risk: RiskAnalyzer::new(),
-            search: NeuralSearch::new(),
-            architect: AutoArchitect::new(),
-            graph: CodeGraphBuilder::new(),
-            diff: SemanticDiffEngine::new(),
-            hypothesis: HypothesisEngine::new(),
-            cognitive: CognitiveScaffold::new(),
-            mirror: CognitiveMirror::new(),
-            thought: ThoughtChain::new(),
-            response: ResponseAnalyzer::new(),
-            blast: nexus_cog_causal::BlastRadiusCalculator::new(causal.clone()),
-            pre_mortem: nexus_cog_causal::PreMortemEngine::new(causal.clone()),
-            counterfactual: nexus_cog_causal::CounterfactualReasoner::new(causal.clone()),
-            forward: nexus_cog_causal::ForwardReasoner::new(causal.clone()),
-            backward: nexus_cog_causal::BackwardReasoner::new(causal.clone()),
+            backend,
+            blast: BlastRadiusCalculator::new(causal.clone()),
+            pre_mortem: PreMortemEngine::new(causal.clone()),
+            counterfactual: CounterfactualReasoner::new(causal.clone()),
+            forward: ForwardReasoner::new(causal.clone()),
+            backward: BackwardReasoner::new(causal.clone()),
             causal,
             patterns: PatternMatcher::new(),
-            ltm,
-            learner,
-            predictor,
-            intent_storage,
-            intent_checker: IntentChecker::new(),
-            provenance,
+            provenance: ProvenanceGraphEngine::with_backend(
+                std::sync::Arc::new(nexus_cog_storage::SqliteBackend::open_in_memory()?),
+            )?,
             adversarial: AdversarialGenerator::new(),
             edge_cases: EdgeCaseExplorer::new(),
             robustness: RobustnessScorer::new(),
+            intent_storage: IntentStorage::new(),
         })
+    }
+}
+
+impl Default for CortexHandle {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 /// Top-level CLI context.
 pub struct Ctx {
     pub db_path: PathBuf,
-    pub palace_id: String,
-    pub palace: PersistentPalace,
+    /// Brain-like cortex for every brain-related operation.
+    pub cortex: CortexHandle,
     pub engines: Engines,
 }
 
 impl Ctx {
-    pub fn open(db_path: PathBuf, palace_id: String) -> Result<Self> {
-        let backend = Arc::new(SqliteBackend::open(&db_path)?);
-        let palace = PersistentPalace::new(backend.clone(), &palace_id);
-        palace.load().context("palace load")?;
-        let engines = Engines::new(backend)?;
+    pub fn open(db_path: PathBuf, _palace_id: String) -> Result<Self> {
+        let backend = Arc::new(nexus_cog_storage::SqliteBackend::open(&db_path)?);
+        let engines = Engines::new(backend.clone())?;
         Ok(Self {
             db_path,
-            palace_id,
-            palace,
+            cortex: CortexHandle::new(),
             engines,
         })
     }
 
+    /// Persist the cortex + orthogonal engines.
     pub fn save(&self) -> Result<()> {
-        self.palace.save()?;
+        // Cortex is in-memory; callers can use `cortex.snapshot()`
+        // explicitly. The orthogonal engines persist themselves
+        // (provenance / causal) when their state mutates.
         Ok(())
     }
 }

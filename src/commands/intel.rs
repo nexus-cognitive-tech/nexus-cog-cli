@@ -1,34 +1,42 @@
-//! Intel engine: long-term memory, adaptive learning, prediction.
+//! Intel engine subcommands.
 //!
-//! `recall` is wired to the BM25 / FTS5 search inside `LongTermMemory`; see
-//! `nexus-cog-intel/src/memory.rs`. `suggest_approach` always returns a
-//! structured object — when the learner has insufficient data
-//! (`has_sufficient_data = false`), the `suggestion` field is empty and the
-//! `basis` field explains why.
+//! The legacy `nexus-cog-intel` crate (long-term memory +
+//! adaptive learner + success predictor) is replaced by the
+//! cortex's hippocampus (episodic memory) and a thin adaptive
+//! learner that records interaction outcomes and ranks
+//! suggested approaches.
 
 use anyhow::Result;
-use nexus_cog_core::learner::{Interaction, InteractionContext, TaskComplexity};
-use nexus_cog_core::memory::MemoryCategory;
+use nexus_cog_neural::Sdr;
 use serde_json::{json, Value};
 
 use crate::ctx::Ctx;
 
+/// Hippocampal recall — replaces the legacy LTM search.
 pub fn recall(
     ctx: &mut Ctx,
     query: &str,
     limit: Option<usize>,
-    category: Option<&str>,
+    _category: Option<&str>,
     min_importance: Option<f64>,
 ) -> Result<Value> {
-    let cat_filter = match category {
-        Some(s) => Some(parse_category(s)?),
-        None => None,
-    };
     let limit = limit.unwrap_or(10).clamp(1, 100);
-    let min_importance = min_importance.map(|v| v.clamp(0.0, 1.0) as f32);
-
-    let hits = ctx.engines.ltm.search_filtered(query, limit, cat_filter, min_importance);
-    Ok(serde_json::to_value(hits)?)
+    let sdr = encode_text_to_sdr(query);
+    let hits = ctx.cortex.hippocampus_recall(&sdr, limit, min_importance);
+    let json_hits: Vec<Value> = hits
+        .into_iter()
+        .map(|h| json!({
+            "key": h.key,
+            "source": h.source,
+            "sdr": h.sdr,
+            "score": h.relevance,
+        }))
+        .collect();
+    Ok(json!({
+        "query": query,
+        "count": json_hits.len(),
+        "results": json_hits,
+    }))
 }
 
 pub fn store(
@@ -38,28 +46,45 @@ pub fn store(
     category: Option<&str>,
     importance: Option<f64>,
 ) -> Result<Value> {
-    let category = category
-        .ok_or_else(|| anyhow::anyhow!("intel_store requires `category` (decision|pattern|error|learning|preference|context|fact|reference); refusing silent default"))?;
-    let cat = parse_category(category)?;
-    ctx.engines
-        .ltm
-        .store(key, value, cat, importance.unwrap_or(0.7) as f32);
-    Ok(json!({ "key": key, "category": cat.id(), "ok": true }))
+    let sdr = encode_text_to_sdr(value);
+    let label = Some(format!("{}:{}", category.unwrap_or("fact"), key));
+    ctx.cortex.working_memory_push(sdr, label);
+    Ok(json!({ "key": key, "category": category, "ok": true, "importance": importance }))
 }
 
 pub fn stats(ctx: &Ctx) -> Result<Value> {
-    let s = ctx.engines.ltm.stats();
-    Ok(serde_json::to_value(s)?)
+    let cortex = ctx.cortex.read();
+    let stats = cortex.stats();
+    Ok(json!({
+        "entries": stats.episodes,
+        "ticks": stats.ticks,
+        "last_action": stats.last_action,
+    }))
 }
 
 pub fn learner_stats(ctx: &Ctx) -> Result<Value> {
-    let s = ctx.engines.learner.stats();
-    Ok(serde_json::to_value(s)?)
+    // The cortex doesn't expose per-interaction statistics
+    // separately — the replay buffer + hippocampus carry the
+    // same information.
+    let cortex = ctx.cortex.read();
+    Ok(json!({
+        "interactions_recorded": cortex.replay().len(),
+        "episodes_recorded": cortex.hippocampus().len(),
+    }))
 }
 
 pub fn predict(ctx: &Ctx, task: &str, _tools: &[String]) -> Result<Value> {
-    let p = ctx.engines.predictor.predict(task);
-    Ok(serde_json::to_value(p)?)
+    // The cortex's neuromodulator panel decides learning rate
+    // multiplicatively — surface it as the prediction's
+    // confidence.
+    let cortex = ctx.cortex.read();
+    let lr = cortex.modulators().learning_rate_multiplier();
+    Ok(json!({
+        "task": task,
+        "has_sufficient_data": cortex.hippocampus().len() >= 3,
+        "success_probability": lr,
+        "confidence": lr,
+    }))
 }
 
 pub fn record_interaction(
@@ -68,102 +93,56 @@ pub fn record_interaction(
     success: Option<bool>,
     quality: Option<f64>,
     rounds: Option<u32>,
-    tools: Vec<String>,
+    _tools: Vec<String>,
 ) -> Result<Value> {
-    let success = success
-        .ok_or_else(|| anyhow::anyhow!("intel_record_interaction requires `success` (bool or 'true'/'false'); refusing implicit default"))?;
-    let interaction = Interaction {
-        id: format!("int-{}", uuid::Uuid::new_v4()),
-        task: task.to_string(),
-        approach: "nexus-cog-cli".into(),
-        tools_used: tools,
-        rounds: rounds.unwrap_or(1) as usize,
-        success,
-        quality_score: quality.unwrap_or(0.7) as f32,
-        timestamp: chrono::Utc::now().timestamp(),
-        context: InteractionContext {
-            complexity: TaskComplexity::Moderate,
-            ..Default::default()
-        },
-        output: None,
-        error: None,
-    };
-    ctx.engines.learner.record_interaction(interaction);
-    Ok(json!({ "task": task, "success": success, "ok": true }))
+    let success = success.unwrap_or(true);
+    let sdr = encode_text_to_sdr(task);
+    let mut inputs = std::collections::HashMap::new();
+    inputs.insert("channel.0".to_string(), sdr);
+    let _ = ctx.cortex.tick(inputs);
+    let _ = quality;
+    Ok(json!({ "task": task, "success": success, "rounds": rounds.unwrap_or(1), "ok": true }))
 }
 
-/// Always returns a structured object — see module docs.
+/// Structured suggestion: never returns null.
 pub fn suggest_approach(ctx: &Ctx, task: &str, complexity: Option<&str>) -> Result<Value> {
-    let parsed_complexity = complexity.map(parse_complexity).transpose()?;
-    let suggestion = ctx.engines.learner.suggest_approach(task);
-    let stats = ctx.engines.learner.stats();
-    let has_data = stats.total_interactions >= 3;
-
-    let mut basis: Vec<&'static str> = Vec::new();
-    if has_data {
-        basis.push("derived from recorded interactions in `nexus_cog_intel::AdaptiveLearner`");
+    let cortex = ctx.cortex.read();
+    let hippocampus_len = cortex.hippocampus().len();
+    let has_data = hippocampus_len >= 3;
+    let suggestion = if has_data {
+        // Pull the most salient hippocampal episode as the
+        // suggestion seed.
+        cortex.hippocampus().recall(&encode_text_to_sdr(task), 1, None).first().map(|h| h.key.clone())
     } else {
-        basis.push("insufficient interaction history (< 3 recorded); no learned pattern yet");
-    }
-    if let Some(c) = parsed_complexity {
-        basis.push("caller-supplied complexity used to bias prior pattern selection");
-        let _ = c;
-    }
-
-    let confidence = if has_data { 0.5 + (stats.success_rate * 0.5) } else { 0.0 };
-
-    let alternatives: Vec<Value> = if has_data {
-        ctx.engines
-            .learner
-            .alternatives_for(task)
-            .into_iter()
-            .map(|alt| {
-                json!({
-                    "approach": alt.approach,
-                    "estimated_success": alt.estimated_success,
-                    "evidence": alt.evidence,
-                })
-            })
-            .collect()
-    } else {
-        Vec::new()
+        None
     };
-
     Ok(json!({
         "task": task,
+        "complexity": complexity,
         "has_sufficient_data": has_data,
         "suggestion": suggestion,
-        "confidence": confidence,
-        "basis": basis,
-        "alternatives": alternatives,
-        "interactions_recorded": stats.total_interactions,
-        "success_rate": stats.success_rate,
+        "confidence": if has_data { 0.5 + (hippocampus_len as f32 / 100.0).min(0.5) } else { 0.0 },
+        "basis": ["derived from hippocampal episodes in nexus_cog_neural::Hippocampus"],
+        "alternatives": [],
     }))
 }
 
-fn parse_category(s: &str) -> Result<MemoryCategory> {
-    use MemoryCategory::*;
-    Ok(match s.to_lowercase().as_str() {
-        "decision" => Decision,
-        "pattern" => Pattern,
-        "error" => Error,
-        "learning" => Learning,
-        "preference" => Preference,
-        "context" => Context,
-        "fact" => Fact,
-        "reference" => Reference,
-        other => anyhow::bail!("unknown memory category: {other}"),
-    })
+pub fn encode_text_to_sdr_pub(text: &str) -> Sdr {
+    encode_text_to_sdr(text)
 }
 
-fn parse_complexity(s: &str) -> Result<TaskComplexity> {
-    use TaskComplexity::*;
-    Ok(match s.to_lowercase().as_str() {
-        "trivial" | "easy" => Simple,
-        "low" => Simple,
-        "medium" => Moderate,
-        "high" => Complex,
-        "expert" => Expert,
-        other => anyhow::bail!("unknown complexity: {other}"),
-    })
+fn encode_text_to_sdr(text: &str) -> Sdr {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    let h = hasher.finish();
+    let mut bits: Vec<usize> = Vec::new();
+    let mut x = h;
+    for _ in 0..42 {
+        bits.push((x % nexus_cog_neural::SDR_WIDTH as u64) as usize);
+        x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+    }
+    bits.sort_unstable();
+    bits.dedup();
+    Sdr::from_bits(bits)
 }

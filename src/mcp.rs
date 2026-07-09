@@ -657,7 +657,7 @@ pub async fn dispatch(
         "antifragile_edge" => { let c = ctx.read().await; commands::antifragile::edge_cases(&c, &req_str(&args, "code")?, &req_str(&args, "target")?) }
 
         "backup_json" => { let c = ctx.read().await; let out = std::path::PathBuf::from(req_str(&args, "out")?); commands::backup::export_json(&c, &out) }
-        "decay_apply" => { let mut c = ctx.write().await; let mut cfg = commands::decay::default_config(); if let Some(v) = args.get("half_life_days").and_then(|v| v.as_f64()) { cfg.half_life_days = v as f32; } if let Some(v) = args.get("min_importance").and_then(|v| v.as_f64()) { cfg.min_importance = v as f32; } if let Some(v) = args.get("prune_older_than_days").and_then(|v| v.as_u64()) { cfg.prune_older_than_days = Some(v as u32); } if let Some(v) = args.get("access_count_boost").and_then(|v| v.as_bool()) { cfg.access_count_boost = v; } let report = commands::decay::apply(&mut c, &cfg)?; Ok(commands::decay::report_to_value(&report)) }
+        "decay_apply" => { let c = ctx.read().await; let mut half_life_days = 14.0; let mut min_importance = 0.05; let mut replay_per_cycle = 32; if let Some(v) = args.get("half_life_days").and_then(|v| v.as_f64()) { half_life_days = v as f32; } if let Some(v) = args.get("min_importance").and_then(|v| v.as_f64()) { min_importance = v as f32; } if let Some(v) = args.get("prune_older_than_days").and_then(|v| v.as_u64()) { replay_per_cycle = v as usize; } let report = commands::decay::apply(&c, half_life_days, min_importance, replay_per_cycle)?; Ok(commands::decay::report_to_value(&report)) }
 
         _ => Ok(json!({ "error": format!("unknown tool: {name}") })),
     }
