@@ -1,9 +1,8 @@
 //! Cognitive engine subcommands.
 //!
-//! The legacy `nexus-cog-cognitive` crate is replaced by cortex
-//! primitives — the 6-phase scaffold, mirror and thought chain
-//! are wired into the cortex's own working memory and replay
-//! buffer.
+//! 6-phase scaffold wired through the cortex. The `think`
+//! subcommand feeds a task SDR through one tick and surfaces the
+//! resulting ThoughtBroadcast.
 
 use anyhow::Result;
 use nexus_cog_neural::{Sdr, ThoughtBroadcast};
