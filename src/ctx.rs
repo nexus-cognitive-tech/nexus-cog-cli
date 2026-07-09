@@ -66,22 +66,13 @@ impl CortexHandle {
 
     /// Push an SDR onto working memory.
     pub fn working_memory_push(&self, sdr: nexus_cog_neural::Sdr, label: Option<String>) {
-        self.inner.write().working_memory_push(sdr, label);
+        let mut cortex = self.inner.write();
+        cortex.working_memory.push(sdr, label);
     }
 
-    /// Connect two cortical regions.
-    pub fn hierarchy_connect(&self, from: nexus_cog_neural::RegionId, to: nexus_cog_neural::RegionId) {
-        self.inner.write().hierarchy_connect(from, to);
-    }
-
-    /// Recall over hippocampal episodes using BM25-style overlap.
-    pub fn hippocampus_recall(
-        &self,
-        query: &nexus_cog_neural::Sdr,
-        limit: usize,
-        min_confidence: Option<f64>,
-    ) -> Vec<nexus_cog_neural::HippocampalHit> {
-        self.inner.read().hippocampus().recall(query, limit, min_confidence.map(|v| v as f32))
+    /// Add a thalamic channel to the cortex.
+    pub fn add_thalamic_channel(&self, name: impl Into<String>) -> u32 {
+        self.inner.write().add_thalamic_channel(name)
     }
 }
 

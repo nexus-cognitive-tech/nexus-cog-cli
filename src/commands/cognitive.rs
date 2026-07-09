@@ -50,7 +50,7 @@ pub fn mirror(ctx: &Ctx, subject: &str, response: &str) -> Result<Value> {
         "dopamine": modulators.dopamine.level,
         "serotonin": modulators.serotonin.level,
         "norepinephrine": modulators.norepinephrine.level,
-        "episodes_recorded": stats.episodes,
+        "episodes_recorded": stats.n_episodes,
     }))
 }
 

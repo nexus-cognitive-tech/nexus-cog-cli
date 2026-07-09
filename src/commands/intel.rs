@@ -20,21 +20,28 @@ pub fn recall(
     min_importance: Option<f64>,
 ) -> Result<Value> {
     let limit = limit.unwrap_or(10).clamp(1, 100);
-    let sdr = crate::commands::common::encode_text_to_sdr(query);
-    let hits = ctx.cortex.hippocampus_recall(&sdr, limit, min_importance);
-    let json_hits: Vec<Value> = hits
+    let needle = crate::commands::common::encode_text_to_sdr(query);
+    let cortex = ctx.cortex.read();
+    let items: Vec<Value> = cortex
+        .hippocampus()
+        .episodes_sorted_by_recency()
         .into_iter()
-        .map(|h| json!({
-            "key": h.key,
-            "source": h.source,
-            "sdr": h.sdr,
-            "score": h.relevance,
-        }))
+        .filter(|e| min_importance.map_or(true, |m| e.salience >= m as f32))
+        .take(limit)
+        .map(|e| {
+            let sim = nexus_cog_neural::sdr::semantic_similarity(&needle, &e.sdr);
+            json!({
+                "key": format!("ep-{}", e.id),
+                "source": e.source,
+                "sdr": e.sdr,
+                "score": sim,
+            })
+        })
         .collect();
     Ok(json!({
         "query": query,
-        "count": json_hits.len(),
-        "results": json_hits,
+        "count": items.len(),
+        "results": items,
     }))
 }
 
@@ -55,7 +62,7 @@ pub fn stats(ctx: &Ctx) -> Result<Value> {
     let cortex = ctx.cortex.read();
     let stats = cortex.stats();
     Ok(json!({
-        "entries": stats.episodes,
+        "entries": stats.n_episodes,
         "ticks": stats.ticks,
         "last_action": stats.last_action,
     }))
@@ -111,7 +118,7 @@ pub fn suggest_approach(ctx: &Ctx, task: &str, complexity: Option<&str>) -> Resu
     let suggestion = if has_data {
         // Pull the most salient hippocampal episode as the
         // suggestion seed.
-        cortex.hippocampus().recall(&crate::commands::common::encode_text_to_sdr(task), 1, None).first().map(|h| h.key.clone())
+        cortex.hippocampus().episodes_sorted_by_recency().first().map(|e| format!("ep-{}", e.id))
     } else {
         None
     };

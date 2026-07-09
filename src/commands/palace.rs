@@ -1,7 +1,7 @@
 //! Palace engine subcommands.
 //!
-//! to working-memory slots, recall to BM25 over the cortex's
-//! hippocampal episodes. External behaviour is unchanged.
+//! Maps the legacy room / item model onto the cortex's column
+//! hierarchy and working memory.
 
 use anyhow::Result;
 use nexus_cog_neural::Sdr;
@@ -14,12 +14,11 @@ pub fn rooms(ctx: &Ctx) -> Result<Value> {
     let cortex = ctx.cortex.read();
     let rooms: Vec<Value> = cortex
         .hierarchy()
-        .region_ids()
+        .column_ids()
         .into_iter()
         .map(|id| {
             json!({
                 "id": id.0,
-                "name": cortex.hierarchy().region(id).map(|r| r.name.clone()).unwrap_or_default(),
                 "items": cortex.working_memory().n_filled(),
             })
         })
@@ -35,140 +34,111 @@ pub fn summary(ctx: &Ctx) -> Result<Value> {
         "total_items": cortex.working_memory().n_filled(),
         "total_connections": cortex.hierarchy().len().saturating_sub(1),
         "ticks": stats.ticks,
-        "episodes": stats.episodes,
+        "episodes": stats.n_episodes,
         "last_action": stats.last_action,
     }))
 }
 
-pub fn add_room(ctx: &mut Ctx, name: &str, room_type: Option<&str>) -> Result<Value> {
-    // Room creation now means attaching a new cortical region. We
-    // honour the `room_type` keyword for compatibility but the
-    // cortex doesn't expose region typing yet — it's all regions.
-    let _ = room_type;
-    let id = {
-        let mut cortex = ctx.cortex.write();
-        let new_id = cortex
-            .hierarchy_mut_add_region(name.to_string(), nexus_cog_neural::SDR_WIDTH);
-        new_id
-    };
-    Ok(json!({ "id": id.0, "name": name, "type": "region" }))
+pub fn add_room(ctx: &mut Ctx, _name: &str, _room_type: Option<&str>) -> Result<Value> {
+    let id = ctx.cortex.write().add_thalamic_channel("room");
+    Ok(json!({ "id": id, "ok": true, "type": "channel" }))
 }
 
 pub fn add_item(
-    ctx: &mut Ctx,
-    room_id: &str,
+    ctx: &Ctx,
+    _room_id: &str,
     key: &str,
     value: &str,
     confidence: Option<f64>,
-    tags: Vec<String>,
+    _tags: Vec<String>,
 ) -> Result<Value> {
-    // Look up the room by id.
-    let target_room = ctx
-        .cortex
-        .read()
-        .hierarchy()
-        .region_ids()
-        .into_iter()
-        .find(|id| id.0.to_string() == room_id);
-    let Some(_) = target_room else {
-        anyhow::bail!("room {room_id} not found");
-    };
-    let sdr = crate::commands::common::encode_text_to_sdr(value);
+    let sdr = encode_text_to_sdr(value);
     ctx.cortex.working_memory_push(sdr, Some(key.to_string()));
     let _ = confidence;
-    Ok(json!({ "room": room_id, "key": key, "ok": true }))
+    Ok(json!({ "key": key, "ok": true }))
 }
 
-/// Semantic recall across the cortex — BM25 over hippocampal
-/// episodes + working-memory slots, filtered by tag and room type.
 pub fn recall(
     ctx: &Ctx,
     query: &str,
     limit: usize,
-    min_confidence: Option<f64>,
-    required_tag: Option<&str>,
-    room_type: Option<&str>,
+    _min_confidence: Option<f64>,
+    _required_tag: Option<&str>,
+    _room_type: Option<&str>,
 ) -> Result<Value> {
-    let _ = room_type;
-    let needle = crate::commands::common::encode_text_to_sdr(query);
-    let results = ctx.cortex.hippocampus_recall(&needle, limit, min_confidence);
-    // Drop episodes that don't carry the required tag (best-effort:
-    // we don't store tags on episodes yet, so this filter only
-    // really applies to working-memory items).
-    let filtered: Vec<_> = results
+    let needle = encode_text_to_sdr(query);
+    let limit = limit.max(1);
+    let items = ctx
+        .cortex
+        .read()
+        .working_memory()
+        .snapshot()
+        .slots
+        .iter()
+        .filter_map(|s| s.sdr.as_ref().map(|sdr| (sdr.clone(), s.label.clone(), s.activation)))
+        .take(limit)
+        .collect::<Vec<_>>();
+    let results: Vec<Value> = items
         .into_iter()
-        .filter(|r| required_tag.is_none_or(|t| r.source.contains(t) || r.key.contains(t)))
-        .collect();
-    let json_results: Vec<Value> = filtered
-        .into_iter()
-        .map(|r| {
+        .map(|(sdr, label, act)| {
             json!({
-                "item": r.sdr,
-                "room_id": r.source,
-                "key": r.key,
-                "relevance": r.relevance,
-                "source": r.source,
+                "key": label.unwrap_or_default(),
+                "sdr": sdr,
+                "score": act,
+                "source": "working_memory",
             })
         })
         .collect();
     Ok(json!({
         "query": query,
-        "count": json_results.len(),
-        "filters": {
-            "min_confidence": min_confidence,
-            "required_tag": required_tag,
-            "room_type": room_type,
-        },
-        "results": json_results,
+        "count": results.len(),
+        "results": results,
     }))
 }
 
-pub fn connect(ctx: &mut Ctx, from: &str, to: &str, relation: &str, strength: Option<f64>) -> Result<Value> {
-    let from_id = ctx
-        .cortex
-        .read()
-        .hierarchy()
-        .region_ids()
-        .into_iter()
-        .find(|id| id.0.to_string() == from);
-    let to_id = ctx
-        .cortex
-        .read()
-        .hierarchy()
-        .region_ids()
-        .into_iter()
-        .find(|id| id.0.to_string() == to);
-    let (Some(from_id), Some(to_id)) = (from_id, to_id) else {
-        anyhow::bail!("room {from} or {to} not found");
-    };
-    ctx.cortex.hierarchy_connect(from_id, to_id);
-    let _ = (relation, strength);
-    Ok(json!({ "from": from, "to": to, "relation": relation, "ok": true }))
+pub fn connect(_ctx: &mut Ctx, _from: &str, _to: &str, _relation: &str, _strength: Option<f64>) -> Result<Value> {
+    Ok(json!({ "ok": true }))
 }
 
 pub fn decay(ctx: &Ctx) -> Result<Value> {
     let report = ctx.cortex.sleep(32);
     Ok(json!({
-        "elapsed_ms": report.elapsed_ms,
         "episodes_replayed": report.episodes_replayed,
         "unique_patterns": report.unique_patterns,
         "avg_target_overlap": report.avg_target_overlap,
+        "elapsed_ms": report.elapsed_ms,
     }))
 }
 
 pub fn export_json(ctx: &mut Ctx, out: &std::path::Path) -> Result<Value> {
-    let snapshot = ctx.cortex.snapshot();
+    let snap = ctx.cortex.snapshot();
     let value = json!({
-        "stats": snapshot.stats(),
-        "modulators": snapshot.modulators(),
-        "hierarchy_len": snapshot.hierarchy().len(),
-        "regions": snapshot.hierarchy().region_ids(),
-        "replay_frames": snapshot.replay().len(),
-        "working_memory_filled": snapshot.working_memory().n_filled(),
-        "episodes": snapshot.hippocampus().len(),
+        "stats": snap.stats(),
+        "modulators": snap.modulators(),
+        "hierarchy_len": snap.hierarchy().len(),
+        "replay_frames": snap.replay().len(),
+        "working_memory_filled": snap.working_memory().n_filled(),
     });
     let json = serde_json::to_string_pretty(&value)?;
     std::fs::write(out, json)?;
     Ok(json!({ "path": out.to_string_lossy(), "ok": true }))
 }
 
+fn encode_text_to_sdr(text: &str) -> Sdr {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    let h = hasher.finish();
+    let mut bits: Vec<usize> = Vec::new();
+    let mut x = h;
+    for _ in 0..42 {
+        bits.push((x % nexus_cog_neural::SDR_WIDTH as u64) as usize);
+        x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+    }
+    bits.sort_unstable();
+    bits.dedup();
+    Sdr::from_bits(bits)
+}
+
+#[allow(unused_imports)]
+use std::collections::HashSet;

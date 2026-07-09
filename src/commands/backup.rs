@@ -20,7 +20,7 @@ fn cortex_snapshot_value(c: &nexus_cog_neural::Cortex) -> Value {
         "stats": c.stats(),
         "modulators": c.modulators(),
         "hierarchy_len": c.hierarchy().len(),
-        "regions": c.hierarchy().region_ids(),
+        "regions": c.hierarchy().column_ids(),
         "replay_frames": c.replay().len(),
         "working_memory_filled": c.working_memory().n_filled(),
         "episodes": c.hippocampus().len(),

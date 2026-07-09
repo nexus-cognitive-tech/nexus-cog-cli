@@ -58,13 +58,24 @@ pub fn run(ctx: &mut Ctx, fmt: OutputFormat) -> Result<()> {
 }
 
 fn recall(ctx: &Ctx, fmt: &Fmt, query: &str) {
-    use crate::commands::intel;
-    let hits = ctx.cortex.hippocampus_recall(
-        &crate::commands::common::encode_text_to_sdr(query),
-        10,
-        None,
-    );
-    let value = serde_json::to_value(&hits).unwrap_or(serde_json::Value::Null);
+    let needle = crate::commands::common::encode_text_to_sdr(query);
+    let cortex = ctx.cortex.read();
+    let episodes: Vec<_> = cortex
+        .hippocampus()
+        .episodes_sorted_by_recency()
+        .into_iter()
+        .take(10)
+        .map(|e| {
+            let sim = nexus_cog_neural::sdr::semantic_similarity(&needle, &e.sdr);
+            serde_json::json!({
+                "key": format!("ep-{}", e.id),
+                "source": e.source,
+                "sdr": e.sdr,
+                "score": sim,
+            })
+        })
+        .collect();
+    let value = serde_json::to_value(&episodes).unwrap_or(serde_json::Value::Null);
     let mut out = std::io::stdout();
     let _ = fmt.render(&value, &mut out);
 }
