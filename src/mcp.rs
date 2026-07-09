@@ -27,8 +27,20 @@ use crate::commands;
 #[derive(Debug, Parser)]
 pub struct McpArgs {
     /// Path to the SQLite palace database.
-    #[arg(long, env = "NEXUS_COG_DB", default_value = "~/.local/share/nexus-cog/palace.db")]
-    pub db: String,
+    ///
+    /// **Per-workspace by default.** When omitted, the server derives the
+    /// path as `<workspace>/.nexus-cog/palace.db`, where `workspace` is the
+    /// directory supplied via `--workspace` or, failing that, the current
+    /// working directory. The previous behaviour (a single shared file at
+    /// `~/.local/share/nexus-cog/palace.db`) leaked state across unrelated
+    /// agents and has been removed.
+    #[arg(long, env = "NEXUS_COG_DB")]
+    pub db: Option<String>,
+
+    /// Workspace root. The database lives under `<workspace>/.nexus-cog/`.
+    /// Defaults to the current working directory.
+    #[arg(long, env = "NEXUS_COG_WORKSPACE")]
+    pub workspace: Option<String>,
 
     /// Palace namespace id.
     #[arg(long, env = "NEXUS_COG_PALACE", default_value = "default")]
@@ -36,7 +48,21 @@ pub struct McpArgs {
 }
 
 pub async fn run(args: McpArgs) -> Result<()> {
-    let db = expand_tilde(&args.db);
+    let workspace = args
+        .workspace
+        .as_deref()
+        .map(std::path::Path::new)
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+    let db = match args.db.as_deref() {
+        Some(explicit) => expand_tilde(explicit),
+        None => {
+            let dir = workspace.join(".nexus-cog");
+            std::fs::create_dir_all(&dir).ok();
+            dir.join("palace.db")
+        }
+    };
+    tracing::info!(?db, ?workspace, "opening per-workspace palace");
     let ctx = Arc::new(RwLock::new(Ctx::open(db, args.palace)?));
     let server = NexusCogMcp::new(ctx).serve(stdio()).await?;
     server.waiting().await?;
@@ -130,11 +156,14 @@ pub fn all_tools() -> Vec<Tool> {
     ));
     tools.push(build_tool(
         "palace_recall",
-        "Semantic recall across the palace.",
+        "Semantic recall across the palace. Hybrid BM25 + confidence ranking.",
         object_schema(
             &[
                 ("query", "string", "Free-form search query."),
                 ("limit", "integer", "Max results; defaults to 10."),
+                ("min_confidence", "number", "Optional minimum confidence in [0,1]."),
+                ("required_tag", "string", "Optional tag that every recalled item must carry."),
+                ("room_type", "string", "Optional room-type filter: concept|pattern|decision|bug|learning|tool|user|project."),
             ],
             &["query"],
         ),
@@ -178,12 +207,14 @@ pub fn all_tools() -> Vec<Tool> {
     ));
     tools.push(build_tool(
         "brain_search",
-        "Semantic code search over a code corpus.",
+        "Multi-strategy code search (exact + synonym-expanded semantic + structural + behavioral).",
         object_schema(
             &[
                 ("query", "string", "Search query."),
                 ("code", "string", "Inline source corpus (single virtual file)."),
                 ("path", "string", "Optional virtual path for the inline corpus."),
+                ("language", "string", "Optional language hint (e.g. 'rust')."),
+                ("limit", "integer", "Maximum results to return (default 20, max 200)."),
             ],
             &["query", "code"],
         ),
@@ -213,13 +244,15 @@ pub fn all_tools() -> Vec<Tool> {
     ));
     tools.push(build_tool(
         "brain_hypothesis",
-        "Propose an A/B hypothesis comparing two code approaches.",
+        "A/B comparison of two code approaches with a real decision matrix (correctness, complexity, error handling, performance, testability, security, maintainability).",
         object_schema(
             &[
                 ("title", "string", "Short title."),
                 ("description", "string", "What the hypothesis is about."),
                 ("code_a", "string", "Source code of approach A."),
                 ("code_b", "string", "Source code of approach B."),
+                ("language", "string", "Optional language hint (e.g. 'rust')."),
+                ("criteria", "array", "Optional explicit list of decision criteria to evaluate."),
             ],
             &["title", "description", "code_a", "code_b"],
         ),
@@ -228,11 +261,12 @@ pub fn all_tools() -> Vec<Tool> {
     // ---------- Cognitive ----------
     tools.push(build_tool(
         "cognitive_think",
-        "Run the 6-phase cognitive scaffold.",
+        "Run the 6-phase cognitive scaffold and execute it against the supplied response (if any).",
         object_schema(
             &[
                 ("task", "string", "Task description."),
                 ("context", "string", "Optional context snippet."),
+                ("response", "string", "Optional model response to analyse against the 6 phases."),
             ],
             &["task"],
         ),
@@ -349,7 +383,7 @@ pub fn all_tools() -> Vec<Tool> {
     // ---------- Provenance ----------
     tools.push(build_tool(
         "provenance_record",
-        "Record a provenance entry.",
+        "Record a provenance entry. SHA-256 of `content` is computed and stored in `content_hash`; pass `parent` to link this record into the lineage graph.",
         object_schema(
             &[
                 ("artifact", "string", "Artifact identifier (e.g. file path)."),
@@ -357,14 +391,23 @@ pub fn all_tools() -> Vec<Tool> {
                 ("content", "string", "Artifact content."),
                 ("source", "string", "Source: model_output|tool_execution|test_run|user_input|reasoning|code_extraction|file_load|composition|inference."),
                 ("prompt", "string", "Prompt that produced the artifact."),
+                ("parent", "string", "Optional parent record ID — adds a 'derived_from' edge in the lineage graph."),
+                ("agent", "string", "Optional agent / session name (default 'nexus-cog-cli')."),
+                ("confidence", "number", "Optional confidence in [0,1] (default 1.0)."),
             ],
             &["artifact", "origin", "content", "source", "prompt"],
         ),
     ));
     tools.push(build_tool(
         "provenance_explain",
-        "Explain artifact lineage.",
-        object_schema(&[("id", "string", "Record ID.")], &["id"]),
+        "Explain artifact lineage. `match_mode` controls how `id` is resolved: 'exact' (default) only matches the full UUID; 'prefix' resolves any unique record whose ID begins with the supplied value (handy for chat UIs that show only the first 8 chars); 'fuzzy' also accepts a substring match across artifact / origin / content if no exact record was found.",
+        object_schema(
+            &[
+                ("id", "string", "Record ID (UUID, prefix, or fuzzy needle)."),
+                ("match_mode", "string", "Optional: 'exact' | 'prefix' | 'fuzzy' (default 'prefix')."),
+            ],
+            &["id"],
+        ),
     ));
     tools.push(build_tool(
         "provenance_search",
@@ -376,8 +419,16 @@ pub fn all_tools() -> Vec<Tool> {
     // ---------- Intel ----------
     tools.push(build_tool(
         "intel_recall",
-        "Recall long-term memory via ranked token overlap.",
-        object_schema(&[("query", "string", "Free-form query.")], &["query"]),
+        "Recall long-term memory. Hybrid BM25 + recency + importance ranking.",
+        object_schema(
+            &[
+                ("query", "string", "Free-form query."),
+                ("limit", "integer", "Maximum results to return (default 10, max 100)."),
+                ("category", "string", "Optional category filter: decision|pattern|error|learning|preference|context|fact|reference."),
+                ("min_importance", "number", "Optional minimum importance in [0,1]."),
+            ],
+            &["query"],
+        ),
     ));
     tools.push(build_tool(
         "intel_store",
@@ -421,7 +472,7 @@ pub fn all_tools() -> Vec<Tool> {
     ));
     tools.push(build_tool(
         "intel_suggest_approach",
-        "Suggest an approach based on historical data.",
+        "Suggest an approach based on historical data. Returns a structured object: { has_sufficient_data, suggestion, confidence, basis: [...], alternatives: [...] }. Always non-null — an empty suggestion is signalled by has_sufficient_data=false.",
         object_schema(
             &[
                 ("task", "string", "Task description."),
@@ -445,11 +496,12 @@ pub fn all_tools() -> Vec<Tool> {
     ));
     tools.push(build_tool(
         "intent_check",
-        "Check intent against a code snippet.",
+        "Check intent against a code snippet. Runs the security / intent drift detector (hardcoded credentials, weak crypto, JWT bypass, SQL injection, missing error handling, missing authorisation).",
         object_schema(
             &[
                 ("module", "string", "Module name (must have been declared)."),
                 ("current_code", "string", "Source code snippet to inspect."),
+                ("strict", "boolean", "Treat 'info' severity drifts as violations. Default false."),
             ],
             &["module", "current_code"],
         ),
@@ -473,7 +525,13 @@ pub fn all_tools() -> Vec<Tool> {
         "antifragile_adversarial",
         "Generate adversarial inputs.",
         object_schema(
-            &[("target", "string", "Optional target description.")],
+            &[
+                ("target", "string", "Optional target description."),
+                ("limit", "integer", "Maximum number of inputs to return. Defaults to 50, capped at 500."),
+                ("offset", "integer", "Number of inputs to skip from the start (for pagination). Defaults to 0."),
+                ("categories", "array", "Optional subset of categories: empty|boundary|special_characters|large|malformed|repetition|injection|numeric_edge|type_confusion|concurrency|fuzz."),
+                ("include_fuzz", "boolean", "Include random-byte fuzz inputs (off by default)."),
+            ],
             &[],
         ),
     ));
@@ -495,7 +553,19 @@ pub fn all_tools() -> Vec<Tool> {
         "Export palace to JSON.",
         object_schema(&[("out", "string", "Destination file path.")], &["out"]),
     ));
-    tools.push(build_tool("decay_apply", "Apply memory decay with default config.", empty_schema()));
+    tools.push(build_tool(
+        "decay_apply",
+        "Apply memory decay.",
+        object_schema(
+            &[
+                ("half_life_days", "number", "Half-life of an item's importance in days (default 14)."),
+                ("min_importance", "number", "Items / rooms whose decayed importance drops below this are pruned (default 0.05)."),
+                ("prune_older_than_days", "integer", "Optional hard TTL — items older than this are pruned regardless of importance."),
+                ("access_count_boost", "boolean", "Boost importance by access_count (default true)."),
+            ],
+            &[],
+        ),
+    ));
 
     tools
 }
@@ -536,17 +606,17 @@ pub async fn dispatch(
         "palace_add_item" => { let mut c = ctx.write().await;
             let tags = args.get("tags").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
             commands::palace::add_item(&mut c, &req_str(&args, "room_id")?, &req_str(&args, "key")?, &req_str(&args, "value")?, args.get("confidence").and_then(|v| v.as_f64()), tags) }
-        "palace_recall" => { let c = ctx.read().await; let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize; commands::palace::recall(&c, &req_str(&args, "query")?, limit) }
+        "palace_recall" => { let c = ctx.read().await; commands::palace::recall(&c, &req_str(&args, "query")?, args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize, args.get("min_confidence").and_then(|v| v.as_f64()), args.get("required_tag").and_then(|v| v.as_str()), args.get("room_type").and_then(|v| v.as_str())) }
         "palace_connect" => { let mut c = ctx.write().await; commands::palace::connect(&mut c, &req_str(&args, "from")?, &req_str(&args, "to")?, &req_str(&args, "relation")?, args.get("strength").and_then(|v| v.as_f64())) }
 
         "brain_verify" => { let c = ctx.read().await; commands::brain::verify(&c, &req_str(&args, "code")?, args.get("language").and_then(|v| v.as_str())) }
         "brain_risks" => { let c = ctx.read().await; commands::brain::risks(&c, &req_str(&args, "code")?, args.get("file").and_then(|v| v.as_str())) }
-        "brain_search" => { let c = ctx.read().await; commands::brain::search(&c, &req_str(&args, "query")?, &[(args.get("path").and_then(|v| v.as_str()).unwrap_or("<inline>").to_string(), req_str(&args, "code")?)]) }
+        "brain_search" => { let c = ctx.read().await; commands::brain::search(&c, &req_str(&args, "query")?, &[(args.get("path").and_then(|v| v.as_str()).unwrap_or("<inline>").to_string(), req_str(&args, "code")?)], args.get("language").and_then(|v| v.as_str()), args.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize)) }
         "brain_architecture" => { let c = ctx.read().await; commands::brain::architecture(&c, &[(args.get("path").and_then(|v| v.as_str()).unwrap_or("<inline>").to_string(), req_str(&args, "code")?)]) }
         "brain_diff" => { let c = ctx.read().await; commands::brain::diff(&c, &req_str(&args, "file")?, &req_str(&args, "old")?, &req_str(&args, "new")?) }
-        "brain_hypothesis" => { let c = ctx.read().await; commands::brain::hypothesis(&c, &req_str(&args, "title")?, &req_str(&args, "description")?, &req_str(&args, "code_a")?, &req_str(&args, "code_b")?) }
+        "brain_hypothesis" => { let c = ctx.read().await; let criteria = args.get("criteria").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()); commands::brain::hypothesis(&c, &req_str(&args, "title")?, &req_str(&args, "description")?, &req_str(&args, "code_a")?, &req_str(&args, "code_b")?, args.get("language").and_then(|v| v.as_str()), criteria) }
 
-        "cognitive_think" => { let mut c = ctx.write().await; commands::cognitive::think(&mut c, &req_str(&args, "task")?, args.get("context").and_then(|v| v.as_str())) }
+        "cognitive_think" => { let mut c = ctx.write().await; commands::cognitive::think(&mut c, &req_str(&args, "task")?, args.get("context").and_then(|v| v.as_str()), args.get("response").and_then(|v| v.as_str())) }
         "cognitive_mirror" => { let c = ctx.read().await; commands::cognitive::mirror(&c, &req_str(&args, "subject")?, &req_str(&args, "response")?) }
         "cognitive_chain_start" => { let mut c = ctx.write().await; commands::cognitive::start_chain(&mut c) }
         "cognitive_chain_add" => { let mut c = ctx.write().await; commands::cognitive::add_thought(&mut c, &req_str(&args, "type")?, &req_str(&args, "content")?, args.get("confidence").and_then(|v| v.as_f64())) }
@@ -558,18 +628,19 @@ pub async fn dispatch(
         "causal_backward" => { let c = ctx.read().await; commands::causal::backward(&c, &req_str(&args, "entity")?) }
         "causal_counterfactual" => { let c = ctx.read().await; commands::causal::counterfactual(&c, &req_str(&args, "entity")?) }
         "causal_pre_mortem" => { let c = ctx.read().await; commands::causal::pre_mortem(&c, &req_str(&args, "entity")?) }
+        "causal_blast" => { let c = ctx.read().await; commands::causal::blast(&c, &req_str(&args, "entity")?) }
         "causal_dump" => { let c = ctx.read().await; commands::causal::dump(&c) }
 
         "patterns_list" => { let c = ctx.read().await; commands::patterns::list(&c) }
         "patterns_match" => { let c = ctx.read().await; commands::patterns::match_code(&c, &req_str(&args, "code")?, args.get("language").and_then(|v| v.as_str())) }
         "patterns_suggest" => { let c = ctx.read().await; commands::patterns::suggest(&c, &req_str(&args, "task")?, args.get("language").and_then(|v| v.as_str())) }
 
-        "provenance_record" => { let mut c = ctx.write().await; commands::provenance::record(&mut c, &req_str(&args, "artifact")?, &req_str(&args, "origin")?, &req_str(&args, "content")?, &req_str(&args, "source")?, &req_str(&args, "prompt")?) }
-        "provenance_explain" => { let c = ctx.read().await; commands::provenance::explain(&c, &req_str(&args, "id")?) }
+        "provenance_record" => { let mut c = ctx.write().await; commands::provenance::record(&mut c, &req_str(&args, "artifact")?, &req_str(&args, "origin")?, &req_str(&args, "content")?, &req_str(&args, "source")?, &req_str(&args, "prompt")?, args.get("parent").and_then(|v| v.as_str()), args.get("agent").and_then(|v| v.as_str()), args.get("confidence").and_then(|v| v.as_f64())) }
+        "provenance_explain" => { let c = ctx.read().await; commands::provenance::explain(&c, &req_str(&args, "id")?, args.get("match_mode").and_then(|v| v.as_str())) }
         "provenance_search" => { let c = ctx.read().await; commands::provenance::search(&c, &req_str(&args, "query")?) }
         "provenance_snapshot" => { let c = ctx.read().await; commands::provenance::snapshot(&c) }
 
-        "intel_recall" => { let mut c = ctx.write().await; commands::intel::recall(&mut c, &req_str(&args, "query")?) }
+        "intel_recall" => { let mut c = ctx.write().await; commands::intel::recall(&mut c, &req_str(&args, "query")?, args.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize), args.get("category").and_then(|v| v.as_str()), args.get("min_importance").and_then(|v| v.as_f64())) }
         "intel_store" => { let mut c = ctx.write().await; commands::intel::store(&mut c, &req_str(&args, "key")?, &req_str(&args, "value")?, args.get("category").and_then(|v| v.as_str()), args.get("importance").and_then(|v| v.as_f64())) }
         "intel_stats" => { let c = ctx.read().await; commands::intel::stats(&c) }
         "intel_learner_stats" => { let c = ctx.read().await; commands::intel::learner_stats(&c) }
@@ -578,15 +649,15 @@ pub async fn dispatch(
         "intel_suggest_approach" => { let c = ctx.read().await; commands::intel::suggest_approach(&c, &req_str(&args, "task")?, args.get("complexity").and_then(|v| v.as_str())) }
 
         "intent_declare" => { let mut c = ctx.write().await; commands::intent::declare(&mut c, &req_str(&args, "module")?, &req_str(&args, "purpose")?) }
-        "intent_check" => { let mut c = ctx.write().await; commands::intent::check(&mut c, &req_str(&args, "module")?, &req_str(&args, "current_code")?) }
+        "intent_check" => { let mut c = ctx.write().await; commands::intent::check(&mut c, &req_str(&args, "module")?, &req_str(&args, "current_code")?, args.get("strict").and_then(|v| v.as_bool()).unwrap_or(false)) }
         "intent_drift" => { let mut c = ctx.write().await; commands::intent::drift(&mut c, &req_str(&args, "module")?, &req_str(&args, "observation")?, args.get("drift_score").and_then(|v| v.as_f64())) }
         "intent_index" => { let c = ctx.read().await; commands::intent::index(&c) }
 
-        "antifragile_adversarial" => { let c = ctx.read().await; commands::antifragile::adversarial(&c, args.get("target").and_then(|v| v.as_str())) }
+        "antifragile_adversarial" => { let c = ctx.read().await; commands::antifragile::adversarial(&c, args.get("target").and_then(|v| v.as_str()), args.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize), args.get("offset").and_then(|v| v.as_u64()).map(|n| n as usize), args.get("categories").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()), args.get("include_fuzz").and_then(|v| v.as_bool())) }
         "antifragile_edge" => { let c = ctx.read().await; commands::antifragile::edge_cases(&c, &req_str(&args, "code")?, &req_str(&args, "target")?) }
 
         "backup_json" => { let c = ctx.read().await; let out = std::path::PathBuf::from(req_str(&args, "out")?); commands::backup::export_json(&c, &out) }
-        "decay_apply" => { let mut c = ctx.write().await; let report = commands::decay::apply(&mut c, &commands::decay::default_config())?; Ok(commands::decay::report_to_value(&report)) }
+        "decay_apply" => { let mut c = ctx.write().await; let mut cfg = commands::decay::default_config(); if let Some(v) = args.get("half_life_days").and_then(|v| v.as_f64()) { cfg.half_life_days = v as f32; } if let Some(v) = args.get("min_importance").and_then(|v| v.as_f64()) { cfg.min_importance = v as f32; } if let Some(v) = args.get("prune_older_than_days").and_then(|v| v.as_u64()) { cfg.prune_older_than_days = Some(v as u32); } if let Some(v) = args.get("access_count_boost").and_then(|v| v.as_bool()) { cfg.access_count_boost = v; } let report = commands::decay::apply(&mut c, &cfg)?; Ok(commands::decay::report_to_value(&report)) }
 
         _ => Ok(json!({ "error": format!("unknown tool: {name}") })),
     }

@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use nexus_cog_core::palace::{MemoryItem, RoomType};
-use nexus_cog_palace::RecallOptions;
+use nexus_cog_palace::recall::{RecallEngine, RecallOptions};
 use serde_json::{json, Value};
 
 use crate::ctx::Ctx;
@@ -63,9 +63,33 @@ pub fn add_item(
     Ok(json!({ "room": room_id, "key": key, "ok": true }))
 }
 
-pub fn recall(ctx: &Ctx, query: &str, limit: usize) -> Result<Value> {
-    let opts = RecallOptions::default().with_limit(limit);
-    let results = ctx.palace.recall_semantic(query, opts);
+/// Semantic recall across the palace.
+///
+/// This wraps [`RecallEngine::recall_bm25`] when the engine is exposed, falling
+/// back to the legacy semantic-overlap path otherwise. Filters:
+///   * `min_confidence` — drop items below the threshold;
+///   * `required_tag`   — drop items that don't carry the tag;
+///   * `room_type`      — restrict the candidate set to one room type.
+pub fn recall(
+    ctx: &Ctx,
+    query: &str,
+    limit: usize,
+    min_confidence: Option<f64>,
+    required_tag: Option<&str>,
+    room_type: Option<&str>,
+) -> Result<Value> {
+    let mut opts = RecallOptions::default().with_limit(limit);
+    if let Some(c) = min_confidence {
+        opts = opts.with_min_confidence(c as f32);
+    }
+    if let Some(tag) = required_tag {
+        opts.required_tag = Some(tag.to_string());
+    }
+    if let Some(rt) = room_type {
+        opts.room_type = Some(parse_room_type(rt)?);
+    }
+    let rooms = ctx.palace.rooms();
+    let results = RecallEngine::new().recall_bm25(query, &rooms, &opts);
     let json_results: Vec<Value> = results
         .into_iter()
         .map(|r| {
@@ -77,7 +101,16 @@ pub fn recall(ctx: &Ctx, query: &str, limit: usize) -> Result<Value> {
             })
         })
         .collect();
-    Ok(json!({ "query": query, "count": json_results.len(), "results": json_results }))
+    Ok(json!({
+        "query": query,
+        "count": json_results.len(),
+        "filters": {
+            "min_confidence": min_confidence,
+            "required_tag": required_tag,
+            "room_type": room_type,
+        },
+        "results": json_results,
+    }))
 }
 
 pub fn connect(ctx: &mut Ctx, from: &str, to: &str, relation: &str, strength: Option<f64>) -> Result<Value> {

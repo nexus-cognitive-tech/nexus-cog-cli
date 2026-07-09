@@ -13,18 +13,25 @@ categories = ["command-line-utilities"]
 readme = "README.md"
 
 [dependencies]
-nexus-cog-core = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-core", tag = "v0.1.3" }
-nexus-cog-storage = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-storage", tag = "v0.1.1" }
-nexus-cog-embeddings = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-embeddings", tag = "v0.1.4" }
-nexus-cog-palace = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-palace", tag = "v0.2.4" }
-nexus-cog-brain = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-brain", tag = "v0.1.3" }
-nexus-cog-cognitive = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-cognitive", tag = "v0.1.3" }
-nexus-cog-causal = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-causal", tag = "v0.2.4" }
-nexus-cog-patterns = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-patterns", tag = "v0.1.2" }
-nexus-cog-provenance = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-provenance", tag = "v0.2.5" }
-nexus-cog-intel = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-intel", tag = "v0.3.4" }
-nexus-cog-intent = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-intent", tag = "v0.2.3" }
-nexus-cog-antifragile = { git = "https://github.com/nexus-cognitive-tech/nexus-cog-antifragile", tag = "v0.1.3" }
+nexus-cog-core = { path = "../nexus-cog-core", version = "0.1.0" }
+nexus-cog-storage = { path = "../nexus-cog-storage", version = "0.1.0" }
+nexus-cog-embeddings = { path = "../nexus-cog-embeddings", version = "0.1.0" }
+nexus-cog-palace = { path = "../nexus-cog-palace", version = "0.1.0" }
+nexus-cog-brain = { path = "../nexus-cog-brain", version = "0.1.0" }
+nexus-cog-cognitive = { path = "../nexus-cog-cognitive", version = "0.1.0" }
+nexus-cog-causal = { path = "../nexus-cog-causal", version = "0.2.0" }
+nexus-cog-patterns = { path = "../nexus-cog-patterns", version = "0.1.0" }
+nexus-cog-provenance = { path = "../nexus-cog-provenance", version = "0.2.0" }
+nexus-cog-intel = { path = "../nexus-cog-intel", version = "0.1.0" }
+nexus-cog-intent = { path = "../nexus-cog-intent", version = "0.2.0" }
+nexus-cog-antifragile = { path = "../nexus-cog-antifragile", version = "0.1.0" }
+
+# ─── Dev-cycle overrides ───────────────────────────────────────────────────
+# Every engine crate is a `path` dependency in this manifest, so no
+# `[patch]` block is required. To restore upstream git deps for a release
+# build, swap the `path =` lines above back to `git = "..."` with the
+# appropriate `tag`.
+# ────────────────────────────────────────────────────────────────────────────
 
 clap = { version = "4", features = ["derive", "cargo", "wrap_help", "env"] }
 clap_complete = "4"
@@ -48,6 +55,9 @@ rmcp = { version = "2.1", features = ["server", "macros", "transport-io"] }
 schemars = "1"
 tokio = { version = "1", features = ["full"] }
 parking_lot = "0.12"
+sha2 = "0.10"
+regex = "1"
+once_cell = "1"
 
 [dev-dependencies]
 tempfile = "3"

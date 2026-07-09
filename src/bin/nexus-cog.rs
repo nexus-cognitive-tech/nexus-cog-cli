@@ -32,11 +32,25 @@ async fn main() -> Result<()> {
     let cfg = CliConfig::load_default().unwrap_or_default();
     let profile: Option<&Profile> = cfg.resolve(cli.profile.as_deref());
 
-    let db = cli
+    // Per-workspace DB by default: `<workspace>/.nexus-cog/palace.db`. The
+    // previous global default (`~/.local/share/nexus-cog/palace.db`) leaked
+    // state across unrelated agents and has been removed.
+    let workspace: PathBuf = cli
+        .workspace
+        .clone()
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let db: PathBuf = cli
         .db
         .clone()
         .or_else(|| profile.and_then(|p| p.db.clone()))
-        .unwrap_or_else(|| expand_tilde(&PathBuf::from("~/.local/share/nexus-cog/palace.db")));
+        .map(|p| expand_tilde(&p))
+        .unwrap_or_else(|| {
+            let dir = workspace.join(".nexus-cog");
+            std::fs::create_dir_all(&dir).ok();
+            dir.join("palace.db")
+        });
     let palace_id = match cli.palace.clone() {
         v if !v.is_empty() => v,
         _ => profile
@@ -63,12 +77,10 @@ async fn main() -> Result<()> {
         Cmd::Embedder(cmd) => return run_embedder(cmd, format),
         Cmd::Doctor => return run_doctor(),
         // The MCP server is handled asynchronously below.
-        Cmd::Mcp { db, palace } => {
+        Cmd::Mcp { db, palace, workspace } => {
             let args = McpArgs {
-                db: db
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "~/.local/share/nexus-cog/palace.db".into()),
+                db: db.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                workspace: workspace.as_ref().map(|p| p.to_string_lossy().into_owned()),
                 palace: palace.clone().unwrap_or_else(|| "default".into()),
             };
             // Drop any tracing init — rmcp owns the stdio pipe and tracing
@@ -114,7 +126,7 @@ fn run_palace(ctx: &mut Ctx, c: nexus_cog_cli::cli::PalaceCmd, format: OutputFor
         P::AddItem { room, key, value, confidence, tags } => {
             palace::add_item(ctx, &room, &key, &value, Some(confidence), tags)?
         }
-        P::Recall { query, limit } => palace::recall(ctx, &query, limit)?,
+        P::Recall { query, limit } => palace::recall(ctx, &query, limit, None, None, None)?,
         P::Connect { from, to, relation, strength } => {
             palace::connect(ctx, &from, &to, &relation, Some(strength))?
         }
@@ -128,8 +140,14 @@ fn run_brain(ctx: &Ctx, c: nexus_cog_cli::cli::BrainCmd, format: OutputFormat) -
     let v = match c {
         B::Verify { code, language } => brain::verify(ctx, &code, Some(&language))?,
         B::Risks { code, file } => brain::risks(ctx, &code, Some(&file))?,
-        B::Search { query, code, path } => {
-            brain::search(ctx, &query, &[(path.clone(), code)])?
+        B::Search { query, code, path, language, limit } => {
+            brain::search(
+                ctx,
+                &query,
+                &[(path.clone(), code)],
+                language.as_deref(),
+                limit,
+            )?
         }
         B::Architecture { code, path } => {
             let corpus = vec![(path.clone(), code)];
@@ -140,8 +158,8 @@ fn run_brain(ctx: &Ctx, c: nexus_cog_cli::cli::BrainCmd, format: OutputFormat) -
             brain::graph(ctx, &corpus)?
         }
         B::Diff { old, new, file } => brain::diff(ctx, &file, &old, &new)?,
-        B::Hypothesis { title, description, code_a, code_b } => {
-            brain::hypothesis(ctx, &title, &description, &code_a, &code_b)?
+        B::Hypothesis { title, description, code_a, code_b, language } => {
+            brain::hypothesis(ctx, &title, &description, &code_a, &code_b, language.as_deref(), None)?
         }
         B::File { path } => brain::analyze_file(ctx, &path)?,
     };
@@ -152,7 +170,7 @@ fn run_brain(ctx: &Ctx, c: nexus_cog_cli::cli::BrainCmd, format: OutputFormat) -
 fn run_cognitive(ctx: &mut Ctx, c: nexus_cog_cli::cli::CognitiveCmd, format: OutputFormat) -> Result<()> {
     use nexus_cog_cli::cli::CognitiveCmd as C;
     let v = match c {
-        C::Think { task, context } => cognitive::think(ctx, &task, Some(&context))?,
+        C::Think { task, context } => cognitive::think(ctx, &task, Some(&context), None)?,
         C::Mirror { subject, response } => cognitive::mirror(ctx, &subject, &response)?,
         C::ChainStart => cognitive::start_chain(ctx)?,
         C::ChainAdd { r#type, content, confidence } => {
@@ -175,6 +193,7 @@ fn run_causal(ctx: &mut Ctx, c: nexus_cog_cli::cli::CausalCmd, format: OutputFor
         C::Backward { entity } => causal::backward(ctx, &entity)?,
         C::Counterfactual { entity } => causal::counterfactual(ctx, &entity)?,
         C::PreMortem { entity } => causal::pre_mortem(ctx, &entity)?,
+        C::Blast { entity } => causal::blast(ctx, &entity)?,
         C::Dump => causal::dump(ctx)?,
     };
     common::print(ctx, render_with(v, format))?;
@@ -196,9 +215,19 @@ fn run_provenance(ctx: &mut Ctx, c: nexus_cog_cli::cli::ProvenanceCmd, format: O
     use nexus_cog_cli::cli::ProvenanceCmd as P;
     let v = match c {
         P::Record { artifact, origin, content, source, prompt } => {
-            provenance::record(ctx, &artifact, &origin, &content, &source, &prompt)?
+            provenance::record(
+                ctx,
+                &artifact,
+                &origin,
+                &content,
+                &source,
+                &prompt,
+                None,
+                None,
+                None,
+            )?
         }
-        P::Explain { id } => provenance::explain(ctx, &id)?,
+        P::Explain { id } => provenance::explain(ctx, &id, None)?,
         P::Search { query } => provenance::search(ctx, &query)?,
     };
     common::print(ctx, render_with(v, format))?;
@@ -208,7 +237,13 @@ fn run_provenance(ctx: &mut Ctx, c: nexus_cog_cli::cli::ProvenanceCmd, format: O
 fn run_intel(ctx: &mut Ctx, c: nexus_cog_cli::cli::IntelCmd, format: OutputFormat) -> Result<()> {
     use nexus_cog_cli::cli::IntelCmd as I;
     let v = match c {
-        I::Recall { query } => intel::recall(ctx, &query)?,
+        I::Recall { query, limit, category, min_importance } => intel::recall(
+            ctx,
+            &query,
+            limit,
+            category.as_deref(),
+            min_importance,
+        )?,
         I::Store { key, value, category, importance } => {
             intel::store(ctx, &key, &value, Some(&category), Some(importance))?
         }
@@ -230,7 +265,9 @@ fn run_intent(ctx: &mut Ctx, c: nexus_cog_cli::cli::IntentCmd, format: OutputFor
     use nexus_cog_cli::cli::IntentCmd as I;
     let v = match c {
         I::Declare { module, purpose } => intent::declare(ctx, &module, &purpose)?,
-        I::Check { module, current_code } => intent::check(ctx, &module, &current_code)?,
+        I::Check { module, current_code, strict } => {
+            intent::check(ctx, &module, &current_code, strict)?
+        }
         I::Drift { module, observation, drift_score } => {
             intent::drift(ctx, &module, &observation, Some(drift_score))?
         }
@@ -243,7 +280,9 @@ fn run_intent(ctx: &mut Ctx, c: nexus_cog_cli::cli::IntentCmd, format: OutputFor
 fn run_antifragile(ctx: &Ctx, c: nexus_cog_cli::cli::AntifragileCmd, format: OutputFormat) -> Result<()> {
     use nexus_cog_cli::cli::AntifragileCmd as A;
     let v = match c {
-        A::Adversarial { target } => antifragile::adversarial(ctx, Some(&target))?,
+        A::Adversarial { target } => {
+            antifragile::adversarial(ctx, Some(&target), None, None, None, None)?
+        }
         A::Edge { code, target } => antifragile::edge_cases(ctx, &code, &target)?,
     };
     common::print(ctx, render_with(v, format))?;

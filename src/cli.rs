@@ -21,9 +21,18 @@ use crate::format::OutputFormat;
     arg_required_else_help = true,
 )]
 pub struct Cli {
-    /// Path to the SQLite palace database.
+    /// Path to the SQLite palace database. Defaults to
+    /// `<workspace>/.nexus-cog/palace.db`; see `--workspace`.
     #[arg(long, global = true, env = "NEXUS_COG_DB")]
     pub db: Option<PathBuf>,
+
+    /// Workspace root for per-project storage. The database lives at
+    /// `<workspace>/.nexus-cog/palace.db` unless `--db` overrides it.
+    /// Defaults to the current working directory. The old global default
+    /// (`~/.local/share/nexus-cog/palace.db`) leaked state across unrelated
+    /// agents and has been removed.
+    #[arg(long, global = true, env = "NEXUS_COG_WORKSPACE")]
+    pub workspace: Option<PathBuf>,
 
     /// Palace namespace id.
     #[arg(long, global = true, default_value = "default", env = "NEXUS_COG_PALACE")]
@@ -110,9 +119,13 @@ pub enum Cmd {
 
     /// Run as an MCP server (stdio transport).
     Mcp {
-        /// Path to the SQLite palace database.
-        #[arg(long, env = "NEXUS_COG_DB", default_value = "~/.local/share/nexus-cog/palace.db")]
+        /// Path to the SQLite palace database (overrides `--workspace`).
+        #[arg(long, env = "NEXUS_COG_DB")]
         db: Option<std::path::PathBuf>,
+
+        /// Workspace root — DB lives at `<workspace>/.nexus-cog/palace.db`.
+        #[arg(long, env = "NEXUS_COG_WORKSPACE")]
+        workspace: Option<std::path::PathBuf>,
 
         /// Palace namespace id.
         #[arg(long, env = "NEXUS_COG_PALACE", default_value = "default")]
@@ -194,11 +207,13 @@ pub enum BrainCmd {
         #[arg(long)] code: String,
         #[arg(long, default_value = "<inline>")] file: String,
     },
-    /// Semantic code search.
+    /// Semantic code search (multi-strategy: exact + synonym-expanded).
     Search {
         query: String,
         #[arg(long, default_value = "")] code: String,
         #[arg(long, default_value = "<inline>")] path: String,
+        #[arg(long)] language: Option<String>,
+        #[arg(long)] limit: Option<usize>,
     },
     /// Architecture analysis.
     Architecture {
@@ -222,6 +237,7 @@ pub enum BrainCmd {
         #[arg(long)] description: String,
         #[arg(long)] code_a: String,
         #[arg(long)] code_b: String,
+        #[arg(long)] language: Option<String>,
     },
     /// Analyse a file on disk: verify + risks + architecture.
     File {
@@ -288,6 +304,10 @@ pub enum CausalCmd {
     PreMortem {
         entity: String,
     },
+    /// Blast-radius analysis: how much of the system is affected by a change.
+    Blast {
+        entity: String,
+    },
     /// Snapshot the graph.
     Dump,
 }
@@ -333,7 +353,13 @@ pub enum ProvenanceCmd {
 
 #[derive(Debug, Subcommand)]
 pub enum IntelCmd {
-    Recall { query: String },
+    /// Hybrid BM25 + FTS5 recall over long-term memory.
+    Recall {
+        query: String,
+        #[arg(long)] limit: Option<usize>,
+        #[arg(long)] category: Option<String>,
+        #[arg(long)] min_importance: Option<f64>,
+    },
     Store {
         key: String,
         value: String,
@@ -369,6 +395,7 @@ pub enum IntentCmd {
     Check {
         module: String,
         #[arg(long)] current_code: String,
+        #[arg(long, default_value_t = false)] strict: bool,
     },
     Drift {
         module: String,

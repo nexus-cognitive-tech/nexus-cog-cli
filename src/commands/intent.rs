@@ -1,12 +1,14 @@
-//! Intent engine: declaration, preservation index.
+//! Intent engine: declaration, preservation index, security drift detection.
+
+mod drift_detector;
 
 use anyhow::Result;
 use nexus_cog_core::common::Severity;
-use nexus_cog_core::intent::{Invariant, InvariantOperator, ModuleIntent};
-use serde_json::Value;
+use nexus_cog_core::intent::{Invariant, IntentDrift, InvariantOperator, ModuleIntent};
+use serde_json::{json, Value};
 
 use crate::ctx::Ctx;
-use Severity as Sev;
+use crate::commands::intent::drift_detector as detector;
 
 pub fn declare(ctx: &mut Ctx, module: &str, purpose: &str) -> Result<Value> {
     let intent = ModuleIntent {
@@ -20,26 +22,90 @@ pub fn declare(ctx: &mut Ctx, module: &str, purpose: &str) -> Result<Value> {
         last_verified_at: None,
     };
     ctx.engines.intent_storage.declare(intent);
-    Ok(serde_json::json!({ "module": module, "ok": true }))
+    Ok(json!({ "module": module, "ok": true }))
 }
 
-pub fn check(ctx: &mut Ctx, module: &str, current_code: &str) -> Result<Value> {
-    // Extract trivial observations from the code snippet: identifier tokens,
-    // string literals, and numeric literals. This is a heuristic but it's
-    // strictly better than the previous stub.
+/// Check `current_code` against the declared intent for `module`.
+///
+/// The check now runs the full [`detector`] pass over the snippet and folds
+/// every drift finding into:
+///   * `drift`          — typed `IntentDrift` records the persistence layer
+///                        understands;
+///   * `ipi`            — a real `0..=100` score, computed as
+///                        `100 - penalty_score(findings, strict)`;
+///   * `confidence`     — inversely proportional to the number of findings.
+///
+/// `strict` treats `Info`-level findings as full violations.
+pub fn check(ctx: &mut Ctx, module: &str, current_code: &str, strict: bool) -> Result<Value> {
+    let module = module.to_string();
+    let findings = detector::detect(current_code);
+    let penalty = detector::penalty_score(&findings, strict);
+    let ipi = (100.0 - penalty).round().clamp(0.0, 100.0) as u32;
+
+    // Translate detector findings into IntentDrift records so the persistent
+    // index stays compatible with the storage schema.
+    let drift: Vec<IntentDrift> = findings
+        .iter()
+        .map(|f| IntentDrift {
+            id: format!("drift-{}", uuid::Uuid::new_v4()),
+            module: module.clone(),
+            invariant_id: format!("{:?}", f.kind),
+            description: f.description.clone(),
+            severity: f.severity,
+            location: f.line.map(|line| nexus_cog_core::common::Range::line(line, 0, 0)),
+            suggested_fix: f.suggested_fix.clone(),
+        })
+        .collect();
+
+    let confidence = match findings.len() {
+        0 => 1.0,
+        1..=2 => 0.85,
+        3..=5 => 0.6,
+        6..=10 => 0.35,
+        _ => 0.15,
+    };
+
+    // Best-effort compatibility path: still call the underlying invariant
+    // evaluator so existing invariant declarations (if any) keep contributing
+    // to the drift list.
     let observations = extract_observations(current_code);
-    match ctx
-        .engines
-        .intent_checker
-        .check(&mut ctx.engines.intent_storage, module, &observations)
-    {
-        Ok(check) => Ok(serde_json::to_value(check)?),
-        Err(e) => Ok(serde_json::json!({
-            "module": module,
-            "ok": false,
-            "reason": e.to_string(),
-        })),
+    let mut engine_drift: Vec<IntentDrift> = Vec::new();
+    let mut engine_ipi: Option<u32> = None;
+    if let Some(intent) = ctx.engines.intent_storage.intent(&module) {
+        if !intent.invariants.is_empty() {
+            match ctx.engines.intent_checker.check(
+                &mut ctx.engines.intent_storage,
+                &module,
+                &observations,
+            ) {
+                Ok(check) => {
+                    engine_drift = check.drift;
+                    engine_ipi = Some(check.ipi);
+                }
+                Err(_) => { /* surface only detector findings below */ }
+            }
+        }
     }
+
+    let mut all_drift = drift;
+    all_drift.extend(engine_drift);
+
+    // Combined IPI: take the minimum of detector- and invariant-based scores
+    // so a clean detector pass never masks a violated invariant.
+    let final_ipi = match engine_ipi {
+        Some(other) => ipi.min(other),
+        None => ipi,
+    };
+
+    Ok(json!({
+        "module": module,
+        "ipi": final_ipi,
+        "confidence": confidence,
+        "strict": strict,
+        "findings_count": findings.len(),
+        "drift": all_drift,
+        "findings": findings,
+    }))
 }
 
 pub fn drift(ctx: &mut Ctx, module: &str, observation: &str, score: Option<f64>) -> Result<Value> {
@@ -154,8 +220,8 @@ fn parse_op(s: &str) -> Result<InvariantOperator> {
     })
 }
 
-fn parse_severity(s: String) -> Sev {
-    use Sev::*;
+fn parse_severity(s: String) -> Severity {
+    use Severity::*;
     match s.to_lowercase().as_str() {
         "info" => Info,
         "low" => Low,

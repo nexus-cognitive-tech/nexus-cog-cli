@@ -28,6 +28,41 @@ nexus-cog doctor                              # diagnostics
 - **All 9 engines** wired up as subcommands
 - **Output formats** — `--format table|json|yaml|plain`, auto-disabled colours when piped
 - **Multi-profile config** — `~/.config/nexus-cog/config.toml` with named palace profiles
+
+## Development workflow (poly-repo)
+
+Each engine crate is an independent git repository. The CLI consumes them
+through `path` dependencies in `Cargo.toml` — every sibling crate must be
+checked out next to this directory:
+
+```
+$HOME/projects/
+├── nexus-cog-cli/           ← this crate
+├── nexus-cog-core/
+├── nexus-cog-storage/
+├── nexus-cog-embeddings/
+├── nexus-cog-palace/
+├── nexus-cog-brain/
+├── nexus-cog-cognitive/
+├── nexus-cog-causal/
+├── nexus-cog-patterns/
+├── nexus-cog-provenance/
+├── nexus-cog-intel/
+├── nexus-cog-intent/
+└── nexus-cog-antifragile/
+```
+
+This layout is the dev convention. Engine crates therefore do **not**
+build standalone (they reference sibling crates by relative path). For
+a release / `cargo publish` flow, swap the `path =` lines back to
+`git = "https://github.com/.../<crate>", tag = "vX.Y.Z"` and bump the tag.
+
+> **Note on `[patch]`**: the standard cargo mechanism for redirecting git
+> deps to local paths (`[patch."https://github.com/..."]`) triggers an
+> upstream cargo 1.96 ambiguity error (`patch for anyhow in registry
+> crates-io resolved to more than one candidate`) when the patched
+> crates have transitive `crates-io` dependencies. We pin sibling deps
+> via `path` directly to sidestep this until cargo upstream is fixed.
 - **Shell completions** — `nexus-cog completions bash > ~/.bash_completion.d/nexus-cog`
 - **REPL** — `nexus-cog repl` opens an interactive search shell
 - **Env vars** — `NEXUS_COG_DB`, `NEXUS_COG_PALACE`
